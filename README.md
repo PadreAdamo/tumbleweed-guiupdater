@@ -20,4 +20,4 @@ the recommended `zypper dup` workflow — without exposing package management co
 🚧 Early design phase. No code yet.
 
 ## License
-TBD
+GPL 2.0
