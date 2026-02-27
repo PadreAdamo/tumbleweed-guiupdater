@@ -1,0 +1,17 @@
+# Update Workflow
+
+## Manual Update
+1. User clicks “Update”
+2. Controller performs dry-run
+3. Summary is generated
+4. If policy allows, update proceeds automatically
+5. Privileged helper runs `zypper dup`
+6. Optional Flatpak updates are applied
+7. Result is logged and user is notified
+
+## Scheduled Check
+1. systemd user timer runs controller in check mode
+2. If no updates: exit silently
+3. If updates:
+   - notify user, or
+   - auto-apply if policy allows
