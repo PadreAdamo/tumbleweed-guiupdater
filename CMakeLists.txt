@@ -14,3 +14,4 @@ include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
 add_subdirectory(src/gui)
+add_subdirectory(src/controller)
