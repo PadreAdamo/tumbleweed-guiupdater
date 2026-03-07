@@ -1,108 +1,110 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QUrl>
-#include <QDebug>
 #include <QTimer>
 #include <QProcess>
-#include <QDir>
-#include <QFileInfo>
-
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
-
 #include <QDateTime>
 #include <QTimeZone>
 
 static QString findTwuCtl()
 {
-    const QString appDir = QCoreApplication::applicationDirPath();
-    QFileInfo devPath(QDir(appDir).filePath("../controller/twu-ctl"));
-    if (devPath.exists() && devPath.isExecutable()) {
-        return devPath.canonicalFilePath();
-    }
-    return QStringLiteral("twu-ctl");
+    return QStringLiteral("/usr/bin/twu-ctl");
 }
 
-static QString prettyTimestampLocal(const QString &isoUtc)
+static QString prettyTimestamp(const QString &isoUtc)
 {
-    if (isoUtc.isEmpty())
-        return QString();
-
     QDateTime dt = QDateTime::fromString(isoUtc, Qt::ISODate);
     if (!dt.isValid())
-        return QString();
+        return {};
 
     dt = dt.toTimeZone(QTimeZone::UTC);
-    const QDateTime local = dt.toLocalTime();
-    return local.toString("MMM d, h:mm AP");
+    return dt.toLocalTime().toString("MMM d, h:mm AP");
 }
 
 struct UiStatus {
-    QString kind; // ok | warn | lock | error
+    QString kind;
     QString text;
+    bool updatesAvailable = false;
+    QString packageList;
 };
 
-static UiStatus statusFromJson(const QJsonObject &o)
+static UiStatus parseStatusJson(const QString &out)
 {
-    const bool ok = o.value("ok").toBool(false);
-    const QString details = o.value("details").toString();
-    const bool updatesAvailable = o.value("updatesAvailable").toBool(false);
-    const bool needsAuth = o.value("needsAuth").toBool(false);
-    const QString ts = o.value("timestamp").toString();
-
-    const QString when = prettyTimestampLocal(ts);
-    const QString suffix = when.isEmpty() ? QString() : QString(" • Last checked: %1").arg(when);
-
     UiStatus s;
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &err);
+
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        s.kind = "error";
+        s.text = out.isEmpty() ? "❌ Invalid controller output" : out;
+        return s;
+    }
+
+    const QJsonObject o = doc.object();
+
+    const bool ok = o["ok"].toBool();
+    const bool updates = o["updatesAvailable"].toBool();
+    const int updateCount = o["updateCount"].toInt();
+    const bool needsAuth = o["needsAuth"].toBool();
+    const QString details = o["details"].toString();
+    const QString preview = o["packagePreview"].toString();
+    const QString packageList = o["packageList"].toString();
+    const QString ts = prettyTimestamp(o["timestamp"].toString());
+
+    const QString suffix = ts.isEmpty() ? QString() : QString(" • %1").arg(ts);
+
+    s.updatesAvailable = updates;
+    s.packageList = packageList;
 
     if (!ok) {
         if (needsAuth) {
             s.kind = "lock";
-            s.text = QString("🔒 Admin required to check updates%1").arg(suffix);
-            if (!details.isEmpty()) s.text += "\n" + details;
+            s.text = QString("🔒 Admin required%1").arg(suffix);
+            if (!details.isEmpty())
+                s.text += "\n" + details;
             return s;
         }
+
         s.kind = "error";
         s.text = QString("❌ Error checking updates%1").arg(suffix);
-        if (!details.isEmpty()) s.text += "\n" + details;
+        if (!details.isEmpty())
+            s.text += "\n" + details;
         return s;
     }
 
-    if (updatesAvailable) {
+    if (updates) {
         s.kind = "warn";
-        s.text = QString("⚠️ Updates available • Admin required to apply%1").arg(suffix);
-        if (!details.isEmpty()) s.text += "\n" + details;
+
+        if (updateCount > 0)
+            s.text = QString("⚠️ %1 updates available%2").arg(updateCount).arg(suffix);
+        else
+            s.text = QString("⚠️ Updates available%1").arg(suffix);
+
+        if (!preview.isEmpty())
+            s.text += "\n" + preview;
+
+        if (!details.isEmpty())
+            s.text += "\n\n" + details;
+
         return s;
     }
 
     s.kind = "ok";
     s.text = QString("✅ Up to date%1").arg(suffix);
-    if (!details.isEmpty()) s.text += "\n" + details;
+    if (!details.isEmpty())
+        s.text += "\n" + details;
+
     return s;
 }
 
-static UiStatus statusFromOutput(const QString &out)
+static void setProp(QObject *root, const char *name, const QVariant &v)
 {
-    const QByteArray raw = out.toUtf8();
-    QJsonParseError jerr{};
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &jerr);
-
-    if (jerr.error == QJsonParseError::NoError && doc.isObject()) {
-        return statusFromJson(doc.object());
-    }
-
-    // Fallback if controller doesn't output JSON
-    UiStatus s;
-    s.kind = "error";
-    s.text = out.isEmpty() ? QStringLiteral("❌ No output from controller") : out;
-    return s;
-}
-
-static void setRootProp(QObject *root, const char *name, const QVariant &v)
-{
-    if (!root) return;
-    root->setProperty(name, v);
+    if (root)
+        root->setProperty(name, v);
 }
 
 int main(int argc, char *argv[])
@@ -115,7 +117,6 @@ int main(int argc, char *argv[])
         &QQmlApplicationEngine::objectCreationFailed,
         &app,
         []() {
-            qCritical() << "Failed to load QML";
             QCoreApplication::exit(1);
         },
         Qt::QueuedConnection
@@ -130,14 +131,10 @@ int main(int argc, char *argv[])
 
     QObject *root = engine.rootObjects().first();
 
-    const QString twuCtl = findTwuCtl();
-    qInfo() << "Using twu-ctl:" << twuCtl;
-
     QProcess proc;
 
     QObject::connect(&proc, &QProcess::finished, &app,
                      [&](int exitCode, QProcess::ExitStatus exitStatus) {
-
         const QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
         const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
 
@@ -145,44 +142,58 @@ int main(int argc, char *argv[])
 
         if (exitStatus != QProcess::NormalExit) {
             st.kind = "error";
-            st.text = "❌ Error: controller crashed";
-        } else if (exitCode != 0) {
-            // Controller may still output JSON on failure; prefer stdout if present.
-            if (!out.isEmpty()) st = statusFromOutput(out);
-            else {
-                st.kind = "error";
-                st.text = err.isEmpty() ? QString("❌ Error: exit %1").arg(exitCode)
-                                        : QString("❌ Error: %1").arg(err);
-            }
+            st.text = "❌ Controller crashed";
+        } else if (exitCode != 0 && out.isEmpty()) {
+            st.kind = "error";
+            st.text = err.isEmpty() ? QString("❌ Error: exit %1").arg(exitCode)
+                                    : QString("❌ Error: %1").arg(err);
         } else {
-            st = statusFromOutput(out);
+            st = parseStatusJson(out);
         }
 
-        setRootProp(root, "statusKind", st.kind);
-        setRootProp(root, "statusText", st.text);
-        setRootProp(root, "busy", false);
+        setProp(root, "statusKind", st.kind);
+        setProp(root, "statusText", st.text);
+        setProp(root, "updatesAvailable", st.updatesAvailable);
+        setProp(root, "packageList", st.packageList);
+        setProp(root, "busy", false);
     });
 
     QTimer poll;
     poll.setInterval(150);
 
     QObject::connect(&poll, &QTimer::timeout, &app, [&]() {
-        if (!root->property("runStatusRequested").toBool())
-            return;
+        if (root->property("runStatusRequested").toBool()) {
+            root->setProperty("runStatusRequested", false);
 
-        root->setProperty("runStatusRequested", false);
+            if (proc.state() != QProcess::NotRunning) {
+                setProp(root, "statusKind", "warn");
+                setProp(root, "statusText", "Busy…");
+                return;
+            }
 
-        if (proc.state() != QProcess::NotRunning) {
-            setRootProp(root, "statusKind", "warn");
-            setRootProp(root, "statusText", "Busy…");
-            return;
+            proc.start(findTwuCtl(), {"status"});
+            if (!proc.waitForStarted(1000)) {
+                setProp(root, "statusKind", "error");
+                setProp(root, "statusText", "❌ Error: could not start controller");
+                setProp(root, "busy", false);
+            }
         }
 
-        proc.start(twuCtl, {"status"});
-        if (!proc.waitForStarted(1000)) {
-            setRootProp(root, "statusKind", "error");
-            setRootProp(root, "statusText", "❌ Error: could not start controller");
-            setRootProp(root, "busy", false);
+        if (root->property("runApplyRequested").toBool()) {
+            root->setProperty("runApplyRequested", false);
+
+            if (proc.state() != QProcess::NotRunning) {
+                setProp(root, "statusKind", "warn");
+                setProp(root, "statusText", "Busy…");
+                return;
+            }
+
+            proc.start("pkexec", {findTwuCtl(), "apply"});
+            if (!proc.waitForStarted(1000)) {
+                setProp(root, "statusKind", "error");
+                setProp(root, "statusText", "❌ Error: could not start apply");
+                setProp(root, "busy", false);
+            }
         }
     });
 
