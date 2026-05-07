@@ -257,30 +257,108 @@ static bool compute_apply_reboot_required(const std::string &zypperOutput)
     return false;
 }
 
+// ---- Unified config reader ----
+// Reads from ~/.config/TumbleweedUpdaterrc (KConfig INI format).
+// When running as root via pkexec, get_user_home() resolves the invoking
+// user's home so the correct config is read.
+
+static std::string get_user_home()
+{
+    const char *pkexec_uid = std::getenv("PKEXEC_UID");
+    if (pkexec_uid) {
+        char *end = nullptr;
+        const unsigned long uid = std::strtoul(pkexec_uid, &end, 10);
+        if (end != pkexec_uid) {
+            const struct passwd *pw = getpwuid(static_cast<uid_t>(uid));
+            if (pw && pw->pw_dir) return std::string(pw->pw_dir);
+        }
+    }
+    const char *home = std::getenv("HOME");
+    return home ? std::string(home) : std::string{};
+}
+
+static std::string get_kconfig_path()
+{
+    const std::string home = get_user_home();
+    return home.empty() ? std::string{} : home + "/.config/TumbleweedUpdaterrc";
+}
+
+// Read a single key from a group in a KConfig-format INI file.
+static std::string read_kconfig_entry(const std::string &path,
+                                       const std::string &group,
+                                       const std::string &key,
+                                       const std::string &def = "")
+{
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return def;
+
+    char buf[512];
+    bool in_group = false;
+    std::string result = def;
+
+    while (fgets(buf, sizeof(buf), f)) {
+        const std::string line = trim_copy(std::string(buf));
+        if (line.empty() || line[0] == '#') continue;
+
+        if (line[0] == '[') {
+            const size_t close = line.find(']');
+            in_group = (close != std::string::npos &&
+                        line.substr(1, close - 1) == group);
+            continue;
+        }
+
+        if (in_group) {
+            const size_t eq = line.find('=');
+            if (eq != std::string::npos && trim_copy(line.substr(0, eq)) == key) {
+                result = trim_copy(line.substr(eq + 1));
+                break;
+            }
+        }
+    }
+
+    fclose(f);
+    return result;
+}
+
 // ---- Snapper integration ----
 
 static bool read_snapper_enabled()
 {
-    const char *home = std::getenv("HOME");
-    if (!home) return true;
+    // Primary: unified config [Snapper] Enabled
+    const std::string kconf = get_kconfig_path();
+    if (!kconf.empty()) {
+        const std::string val = read_kconfig_entry(kconf, "Snapper", "Enabled", "");
+        if (!val.empty()) return (val != "false");
+    }
 
-    const std::string path =
-        std::string(home) + "/.config/TumbleweedUpdater/controller.conf";
-
-    FILE *f = fopen(path.c_str(), "r");
-    if (!f) return true;
-
-    char buf[256];
-    bool result = true;
-    while (fgets(buf, sizeof(buf), f)) {
-        const std::string line = trim_copy(std::string(buf));
-        if (line.rfind("SnapperEnabled=", 0) == 0) {
-            result = (line.substr(15) != "false");
-            break;
+    // Fallback: old per-controller config (read-only, never written)
+    const std::string home = get_user_home();
+    if (!home.empty()) {
+        const std::string old = home + "/.config/TumbleweedUpdater/controller.conf";
+        FILE *f = fopen(old.c_str(), "r");
+        if (f) {
+            char buf[256];
+            bool result = true;
+            while (fgets(buf, sizeof(buf), f)) {
+                const std::string line = trim_copy(std::string(buf));
+                if (line.rfind("SnapperEnabled=", 0) == 0) {
+                    result = (line.substr(15) != "false");
+                    break;
+                }
+            }
+            fclose(f);
+            return result;
         }
     }
-    fclose(f);
-    return result;
+
+    return true;
+}
+
+static bool read_flatpak_enabled()
+{
+    const std::string kconf = get_kconfig_path();
+    if (kconf.empty()) return false;
+    return read_kconfig_entry(kconf, "Flatpak", "Enabled", "false") == "true";
 }
 
 static int create_pre_snapshot()
@@ -337,20 +415,9 @@ static int create_post_snapshot(int pre_num)
 // /root/.local/share/, then chown the file and dir so the user can append later.
 static std::string get_history_log_path()
 {
-    const char *pkexec_uid = std::getenv("PKEXEC_UID");
-    if (pkexec_uid) {
-        char *end = nullptr;
-        const unsigned long uid = std::strtoul(pkexec_uid, &end, 10);
-        if (end != pkexec_uid) {
-            const struct passwd *pw = getpwuid(static_cast<uid_t>(uid));
-            if (pw && pw->pw_dir)
-                return std::string(pw->pw_dir)
-                       + "/.local/share/TumbleweedUpdater/history.log";
-        }
-    }
-    const char *home = std::getenv("HOME");
-    return home ? std::string(home) + "/.local/share/TumbleweedUpdater/history.log"
-                : std::string{};
+    const std::string home = get_user_home();
+    return home.empty() ? std::string{}
+                        : home + "/.local/share/TumbleweedUpdater/history.log";
 }
 
 static void chown_to_invoking_user(const std::string &path)
@@ -579,6 +646,25 @@ static int cmd_apply()
 
     const bool rebootRequired = ok && compute_apply_reboot_required(output);
 
+    // ---- Optional Flatpak update ----
+    bool flatpakUpdated = false;
+    if (ok && read_flatpak_enabled() && std::filesystem::exists("/usr/bin/flatpak")) {
+        std::cout << "\n--- Updating Flatpak packages ---\n";
+        std::cout.flush();
+
+        FILE *fpipe = popen("flatpak update -y 2>&1", "r");
+        if (fpipe) {
+            std::array<char, 4096> fbuf{};
+            while (fgets(fbuf.data(), static_cast<int>(fbuf.size()), fpipe) != nullptr) {
+                const std::string chunk = fbuf.data();
+                output += chunk;
+                std::cout << chunk;
+                std::cout.flush();
+            }
+            flatpakUpdated = (pclose(fpipe) == 0);
+        }
+    }
+
     const std::string summary = ok          ? "Update complete"
                                : needsAuth  ? "Permission denied"
                                             : "Update failed";
@@ -601,6 +687,7 @@ static int cmd_apply()
         << "\"snapshotPre\":" << snapshotPre << ","
         << "\"snapshotPost\":" << snapshotPost << ","
         << "\"snapperUsed\":" << (snapperUsed ? "true" : "false") << ","
+        << "\"flatpakUpdated\":" << (flatpakUpdated ? "true" : "false") << ","
         << "\"timestamp\":\"" << json_escape(timestamp) << "\""
         << "}\n";
     std::cout.flush();

@@ -201,12 +201,29 @@ int main(int argc, char *argv[])
     QObject *root = engine.rootObjects().first();
     QQuickWindow *window = qobject_cast<QQuickWindow *>(root);
 
-    // ---- Auto-check interval from KConfig ----
+    // ---- Read all settings from KConfig ----
 
     auto cfg = KSharedConfig::openConfig();
-    KConfigGroup grp = cfg->group(QStringLiteral("AutoCheck"));
-    const int intervalHours = grp.readEntry("IntervalHours", 4);
-    const int intervalMs = intervalHours * 60 * 60 * 1000;
+
+    KConfigGroup autoCheckGrp = cfg->group(QStringLiteral("AutoCheck"));
+    bool autoCheckEnabled = autoCheckGrp.readEntry("Enabled", true);
+    int  intervalHours    = autoCheckGrp.readEntry("IntervalHours", 4);
+    int  intervalMs       = intervalHours * 60 * 60 * 1000;
+
+    KConfigGroup snapperGrp  = cfg->group(QStringLiteral("Snapper"));
+    bool snapperEnabled = snapperGrp.readEntry("Enabled", true);
+
+    KConfigGroup flatpakGrp  = cfg->group(QStringLiteral("Flatpak"));
+    bool flatpakEnabled = flatpakGrp.readEntry("Enabled", false);
+
+    const bool snapperAvailable = QFile::exists(QStringLiteral("/usr/bin/snapper"));
+
+    setProp(root, "settingsAutoCheckEnabled", autoCheckEnabled);
+    setProp(root, "settingsIntervalHours",    intervalHours);
+    setProp(root, "settingsSnapperEnabled",   snapperEnabled);
+    setProp(root, "settingsFlatpakEnabled",   flatpakEnabled);
+    setProp(root, "snapperAvailable",         snapperAvailable);
+    setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
 
     QTimer autoCheckTimer;
     autoCheckTimer.setSingleShot(true);
@@ -399,6 +416,28 @@ int main(int argc, char *argv[])
             QProcess::startDetached("pkexec", {"systemctl", "reboot"});
         }
 
+        if (root->property("saveSettingsRequested").toBool()) {
+            root->setProperty("saveSettingsRequested", false);
+
+            autoCheckEnabled = root->property("settingsAutoCheckEnabled").toBool();
+            intervalHours    = root->property("settingsIntervalHours").toInt();
+            intervalMs       = intervalHours * 60 * 60 * 1000;
+            snapperEnabled   = root->property("settingsSnapperEnabled").toBool();
+            flatpakEnabled   = root->property("settingsFlatpakEnabled").toBool();
+
+            auto wcfg = KSharedConfig::openConfig();
+            wcfg->group(QStringLiteral("AutoCheck")).writeEntry("Enabled",       autoCheckEnabled);
+            wcfg->group(QStringLiteral("AutoCheck")).writeEntry("IntervalHours", intervalHours);
+            wcfg->group(QStringLiteral("Snapper")).writeEntry("Enabled",         snapperEnabled);
+            wcfg->group(QStringLiteral("Flatpak")).writeEntry("Enabled",         flatpakEnabled);
+            wcfg->sync();
+
+            if (autoCheckEnabled)
+                autoCheckTimer.start(intervalMs);
+            else
+                autoCheckTimer.stop();
+        }
+
         if (root->property("loadHistoryRequested").toBool()) {
             root->setProperty("loadHistoryRequested", false);
             const QString path =
@@ -487,6 +526,7 @@ int main(int argc, char *argv[])
     QObject::connect(quitAction, &QAction::triggered, &app, &QApplication::quit);
 
     QObject::connect(&autoCheckTimer, &QTimer::timeout, &app, [&]() {
+        if (!root->property("settingsAutoCheckEnabled").toBool()) return;
         if (isOnBattery()) {
             fprintf(stderr, "[auto-check] on battery — rescheduling in 30 minutes\n");
             autoCheckTimer.start(30 * 60 * 1000);
@@ -506,7 +546,8 @@ int main(int argc, char *argv[])
         }
     });
 
-    autoCheckTimer.start(intervalMs);
+    if (autoCheckEnabled)
+        autoCheckTimer.start(intervalMs);
 
     poll.start();
     return app.exec();

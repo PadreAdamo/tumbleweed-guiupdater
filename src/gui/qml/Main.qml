@@ -15,21 +15,38 @@ Kirigami.ApplicationWindow {
         root.hide()
     }
 
-    property bool runStatusRequested: false
-    property bool runApplyRequested: false
-    property bool runRebootRequested: false
+    // ---- Controller trigger properties ----
+    property bool runStatusRequested:  false
+    property bool runApplyRequested:   false
+    property bool runRebootRequested:  false
 
-    property bool busy: false
-    property bool updatesAvailable: false
-    property bool rebootRequired: false
-    property string statusKind: "ok"
-    property string statusText: "Idle"
-    property string packageList: ""
-    property string applyLog: ""
+    // ---- Status / UI state ----
+    property bool   busy:           false
+    property bool   updatesAvailable: false
+    property bool   rebootRequired: false
+    property string statusKind:     "ok"
+    property string statusText:     "Idle"
+    property string packageList:    ""
+    property string applyLog:       ""
 
-    property string historyLog: ""
-    property bool loadHistoryRequested: false
-    property bool clearHistoryRequested: false
+    // ---- History ----
+    property string historyLog:              ""
+    property bool   loadHistoryRequested:    false
+    property bool   clearHistoryRequested:   false
+
+    // ---- Settings (read from KConfig by C++ at startup; written back via saveSettingsRequested) ----
+    property bool   settingsAutoCheckEnabled: true
+    property int    settingsIntervalHours:    4
+    property bool   settingsSnapperEnabled:   true
+    property bool   settingsFlatpakEnabled:   false
+    property bool   saveSettingsRequested:    false
+
+    // ---- Read-only state set by C++ ----
+    property bool   snapperAvailable: false
+    property string appVersion:       ""
+
+    // ---- Cross-page navigation ----
+    property int currentTab: 0   // drives tabBar via Connections
 
     property bool showRebootDialog: false
     onShowRebootDialogChanged: {
@@ -55,6 +72,7 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // ---- History entry formatter ----
     function formatHistoryEntry(entry) {
         var icon = "🔍"
         var primary = ""
@@ -97,13 +115,146 @@ Kirigami.ApplicationWindow {
         return { label: icon + "  " + primary, subtitle: sub }
     }
 
+    // ---- Settings page ----
+    Component {
+        id: settingsPageComponent
+
+        Kirigami.ScrollablePage {
+            title: "Settings"
+
+            Kirigami.FormLayout {
+
+                // ════════ Auto-Check ════════
+                Kirigami.Separator {
+                    Kirigami.FormData.isSection: true
+                    Kirigami.FormData.label: "Automatic Updates"
+                }
+
+                Controls.Switch {
+                    Kirigami.FormData.label: "Background checks"
+                    checked: root.settingsAutoCheckEnabled
+                    onToggled: {
+                        root.settingsAutoCheckEnabled = checked
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.ComboBox {
+                    Kirigami.FormData.label: "Check interval"
+                    enabled: root.settingsAutoCheckEnabled
+
+                    readonly property var hourValues: [1, 2, 4, 8, 24]
+                    model: ["1 hour", "2 hours", "4 hours", "8 hours", "24 hours"]
+
+                    Component.onCompleted: {
+                        var idx = hourValues.indexOf(root.settingsIntervalHours)
+                        currentIndex = idx >= 0 ? idx : 2
+                    }
+
+                    onActivated: function(idx) {
+                        root.settingsIntervalHours = hourValues[idx]
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                // ════════ Updates ════════
+                Kirigami.Separator {
+                    Kirigami.FormData.isSection: true
+                    Kirigami.FormData.label: "Updates"
+                }
+
+                Controls.Switch {
+                    Kirigami.FormData.label: "Snapper snapshots"
+                    checked: root.settingsSnapperEnabled && root.snapperAvailable
+                    enabled: root.snapperAvailable
+                    onToggled: {
+                        root.settingsSnapperEnabled = checked
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    visible: !root.snapperAvailable
+                    text: "Snapper is not installed"
+                    font.italic: true
+                    opacity: 0.6
+                }
+
+                Controls.Switch {
+                    Kirigami.FormData.label: "Flatpak updates"
+                    checked: root.settingsFlatpakEnabled
+                    onToggled: {
+                        root.settingsFlatpakEnabled = checked
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                // ════════ About ════════
+                Kirigami.Separator {
+                    Kirigami.FormData.isSection: true
+                    Kirigami.FormData.label: "About"
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: "Application"
+                    text: "Tumbleweed GUI Updater"
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: "Version"
+                    text: root.appVersion
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: "A KDE-native system update orchestrator\nfor openSUSE Tumbleweed."
+                    wrapMode: Text.Wrap
+                }
+
+                Controls.Button {
+                    Kirigami.FormData.label: "History"
+                    text: "View History Log"
+                    onClicked: {
+                        pageStack.pop()
+                        root.currentTab = 1
+                    }
+                }
+
+                Controls.Button {
+                    text: "Clear History"
+                    onClicked: clearConfirmDialog.open()
+                }
+            }
+        }
+    }
+
+    // ---- Main page ----
     pageStack.initialPage: Kirigami.Page {
         title: tabBar.currentIndex === 0 ? "Tumbleweed Updater" : "History"
         padding: 0
 
+        actions: [
+            Kirigami.Action {
+                icon.name: "configure"
+                text: "Settings"
+                onTriggered: pageStack.push(settingsPageComponent)
+            }
+        ]
+
+        // Drive tabBar from root.currentTab (set by settings page "View History Log")
+        Connections {
+            target: root
+            function onCurrentTabChanged() {
+                if (tabBar.currentIndex !== root.currentTab)
+                    tabBar.currentIndex = root.currentTab
+            }
+        }
+
         header: Controls.TabBar {
             id: tabBar
             onCurrentIndexChanged: {
+                root.currentTab = currentIndex
                 mainView.currentIndex = currentIndex
                 if (currentIndex === 1)
                     root.loadHistoryRequested = true
@@ -193,7 +344,6 @@ Kirigami.ApplicationWindow {
                 }
 
                 Controls.ScrollView {
-                    id: logView
                     visible: root.applyLog.length > 0
                     clip: true
                     anchors {
@@ -234,7 +384,6 @@ Kirigami.ApplicationWindow {
                     return result
                 }
 
-                // Clear button — top-right, only when entries exist
                 Row {
                     id: historyToolRow
                     visible: historyTab.entries.length > 0
@@ -283,6 +432,8 @@ Kirigami.ApplicationWindow {
             }
         }
     }
+
+    // ---- Dialogs ----
 
     Controls.Dialog {
         id: packageDialog

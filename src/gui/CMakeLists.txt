@@ -43,6 +43,10 @@ target_include_directories(tumbleweed-updater PRIVATE
     ${KF6_CONFIG_INCLUDE}
 )
 
+target_compile_definitions(tumbleweed-updater PRIVATE
+    APP_VERSION="${PROJECT_VERSION}"
+)
+
 target_link_libraries(tumbleweed-updater PRIVATE
     PkgConfig::QT6CORE
     PkgConfig::QT6GUI
