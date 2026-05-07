@@ -168,6 +168,21 @@ static std::string build_package_list(const std::string &output)
     return result;
 }
 
+static bool compute_reboot_required(const std::string &packageList)
+{
+    return contains_any(packageList, {
+        "kernel-default",
+        "kernel-",
+        "glibc",
+        "systemd",
+        "udev",
+        "dracut",
+        "microcode_ctl",
+        "shim",
+        "grub2"
+    });
+}
+
 static int cmd_status()
 {
     const std::string timestamp = iso8601_now_utc();
@@ -179,6 +194,7 @@ static int cmd_status()
     bool updatesAvailable = false;
     bool ok = true;
     bool needsAuth = false;
+    bool rebootRequired = false;
     int updateCount = 0;
     std::string summary;
     std::string details;
@@ -211,6 +227,7 @@ static int cmd_status()
     } else if (contains_any(output, { "No updates found", "No updates needed", "No updates." })) {
         updatesAvailable = false;
         updateCount = 0;
+        rebootRequired = false;
         summary = "System up to date";
         details = "No updates listed by zypper.";
     } else {
@@ -230,12 +247,20 @@ static int cmd_status()
 
         packagePreview = build_package_preview(output, 5);
         packageList = build_package_list(output);
+        rebootRequired = compute_reboot_required(packageList);
 
         updatesAvailable = (updateCount > 0);
         summary = "Updates available";
-        details =
-            "zypper lists updates.\n"
-            "Administrator privileges will be required to apply them.";
+
+        if (rebootRequired) {
+            details =
+                "zypper lists updates.\n"
+                "A reboot will likely be required after applying them.";
+        } else {
+            details =
+                "zypper lists updates.\n"
+                "Administrator privileges will be required to apply them.";
+        }
     }
 
     std::cout
@@ -247,6 +272,7 @@ static int cmd_status()
         << "\"packageList\":\"" << json_escape(packageList) << "\","
         << "\"updateCount\":" << updateCount << ","
         << "\"updatesAvailable\":" << (updatesAvailable ? "true" : "false") << ","
+        << "\"rebootRequired\":" << (rebootRequired ? "true" : "false") << ","
         << "\"needsAuth\":" << (needsAuth ? "true" : "false") << ","
         << "\"timestamp\":\"" << json_escape(timestamp) << "\""
         << "}\n";
@@ -276,6 +302,7 @@ static int cmd_apply()
         << "\"packageList\":\"\","
         << "\"updateCount\":0,"
         << "\"updatesAvailable\":false,"
+        << "\"rebootRequired\":false,"
         << "\"needsAuth\":true,"
         << "\"timestamp\":\"" << json_escape(timestamp) << "\""
         << "}\n";

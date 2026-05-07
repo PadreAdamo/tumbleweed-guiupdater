@@ -1,11 +1,12 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
+import QtCore
 
 Kirigami.ApplicationWindow {
     id: root
     width: 720
-    height: 460
+    height: 500
     visible: true
     title: "Tumbleweed Updater"
 
@@ -17,6 +18,22 @@ Kirigami.ApplicationWindow {
     property string statusKind: "ok"
     property string statusText: "Idle"
     property string packageList: ""
+
+    Settings {
+        id: appSettings
+        location: StandardPaths.writableLocation(StandardPaths.AppConfigLocation) + "/settings.ini"
+	category: "General"
+	property bool autoCheckOnLaunch: true
+    }
+
+    Component.onCompleted: {
+        if (appSettings.autoCheckOnLaunch && !root.busy) {
+            root.busy = true
+            root.statusText = "Checking for updates…"
+            root.statusKind = "ok"
+            root.runStatusRequested = true
+        }
+    }
 
     pageStack.initialPage: Kirigami.Page {
         title: "Tumbleweed Updater"
@@ -44,10 +61,16 @@ Kirigami.ApplicationWindow {
                      : Kirigami.Theme.negativeTextColor
             }
 
-            Controls.ProgressBar {
-                indeterminate: true
+            Controls.BusyIndicator {
+                running: root.busy
                 visible: root.busy
-                width: parent.width
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
+            Controls.CheckBox {
+                text: "Check for updates on launch"
+                checked: appSettings.autoCheckOnLaunch
+                onToggled: appSettings.autoCheckOnLaunch = checked
             }
 
             Controls.Button {
@@ -72,10 +95,10 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-	    Controls.Button {
+            Controls.Button {
                 text: root.packageList.length > 0
-                   ? "View " + root.packageList.split("\n").length + " Packages"
-                   : "View Packages"
+                      ? "View " + root.packageList.split("\n").length + " Packages"
+                      : "View Packages"
                 enabled: root.packageList.length > 0
                 onClicked: packageDialog.open()
             }
@@ -102,3 +125,4 @@ Kirigami.ApplicationWindow {
         }
     }
 }
+

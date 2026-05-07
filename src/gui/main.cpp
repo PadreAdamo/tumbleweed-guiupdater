@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QQmlApplicationEngine>
 #include <QUrl>
 #include <QTimer>
@@ -49,6 +50,7 @@ static UiStatus parseStatusJson(const QString &out)
     const bool ok = o["ok"].toBool();
     const bool updates = o["updatesAvailable"].toBool();
     const int updateCount = o["updateCount"].toInt();
+    const bool rebootRequired = o["rebootRequired"].toBool();
     const bool needsAuth = o["needsAuth"].toBool();
     const QString details = o["details"].toString();
     const QString preview = o["packagePreview"].toString();
@@ -87,6 +89,9 @@ static UiStatus parseStatusJson(const QString &out)
         if (!preview.isEmpty())
             s.text += "\n" + preview;
 
+        if (rebootRequired)
+            s.text += "\n\n🔁 Reboot will likely be required";
+
         if (!details.isEmpty())
             s.text += "\n\n" + details;
 
@@ -110,6 +115,11 @@ static void setProp(QObject *root, const char *name, const QVariant &v)
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+
+    QCoreApplication::setOrganizationName("TumbleweedUpdater");
+    QCoreApplication::setOrganizationDomain("tumbleweedupdater.local");
+    QCoreApplication::setApplicationName("TumbleweedUpdater");
+
     QQmlApplicationEngine engine;
 
     QObject::connect(
@@ -122,9 +132,7 @@ int main(int argc, char *argv[])
         Qt::QueuedConnection
     );
 
-    engine.load(QUrl::fromLocalFile(
-        QStringLiteral(TWU_SOURCE_DIR "/src/gui/qml/Main.qml")
-    ));
+    engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
 
     if (engine.rootObjects().isEmpty())
         return 1;
@@ -135,28 +143,28 @@ int main(int argc, char *argv[])
 
     QObject::connect(&proc, &QProcess::finished, &app,
                      [&](int exitCode, QProcess::ExitStatus exitStatus) {
-        const QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
-        const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+                         const QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
+                         const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
 
-        UiStatus st;
+                         UiStatus st;
 
-        if (exitStatus != QProcess::NormalExit) {
-            st.kind = "error";
-            st.text = "❌ Controller crashed";
-        } else if (exitCode != 0 && out.isEmpty()) {
-            st.kind = "error";
-            st.text = err.isEmpty() ? QString("❌ Error: exit %1").arg(exitCode)
-                                    : QString("❌ Error: %1").arg(err);
-        } else {
-            st = parseStatusJson(out);
-        }
+                         if (exitStatus != QProcess::NormalExit) {
+                             st.kind = "error";
+                             st.text = "❌ Controller crashed";
+                         } else if (exitCode != 0 && out.isEmpty()) {
+                             st.kind = "error";
+                             st.text = err.isEmpty() ? QString("❌ Error: exit %1").arg(exitCode)
+                             : QString("❌ Error: %1").arg(err);
+                         } else {
+                             st = parseStatusJson(out);
+                         }
 
-        setProp(root, "statusKind", st.kind);
-        setProp(root, "statusText", st.text);
-        setProp(root, "updatesAvailable", st.updatesAvailable);
-        setProp(root, "packageList", st.packageList);
-        setProp(root, "busy", false);
-    });
+                         setProp(root, "statusKind", st.kind);
+                         setProp(root, "statusText", st.text);
+                         setProp(root, "updatesAvailable", st.updatesAvailable);
+                         setProp(root, "packageList", st.packageList);
+                         setProp(root, "busy", false);
+                     });
 
     QTimer poll;
     poll.setInterval(150);
