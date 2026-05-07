@@ -1,93 +1,64 @@
 # Tumbleweed GUI Updater
 
-A KDE-native system update orchestrator for openSUSE Tumbleweed.
+**A KDE-native system update orchestrator for openSUSE Tumbleweed**
 
-Provides a simple, one-button interface for keeping a Tumbleweed system current
-using the recommended `zypper dup` workflow — with live output streaming, system
-tray integration, desktop notifications, Snapper snapshot safety nets, and a
-persistent history log.
+![Status](https://img.shields.io/badge/status-alpha-orange)
+![License](https://img.shields.io/badge/license-GPL--2.0-blue)
 
-## What this is
-
-- A one-button system updater built on Kirigami / Qt6
-- Safe defaults for a rolling release (zypper dup, not install)
-- Optional automation, notifications, and Snapper integration
-- A tray icon that stays out of your way until updates are available
-
-## What this is not
-
-- A package manager
-- A replacement for zypper, YaST, or Myrlyn
-- An application store
-
----
-
-## Status
-
-**Working alpha.** Core update, tray, and history features are functional.
-Tested on openSUSE Tumbleweed with KDE Plasma 6.
+Tumbleweed GUI Updater keeps your rolling-release system current without requiring a terminal. It runs `zypper dup` on your behalf, streams the output live, takes Snapper snapshots before and after so you have a rollback point, and sits quietly in the system tray until it has something to tell you. It is not a package manager — it does one thing and tries to do it well.
 
 ---
 
 ## Features
 
-| Feature | Status |
-|---|---|
-| Check for updates (`zypper lu`) | ✅ |
-| Apply updates (`zypper dup`) via pkexec | ✅ |
-| Live streaming output during apply | ✅ |
-| System tray icon (KStatusNotifierItem, Wayland-safe) | ✅ |
-| Tray icon state: ok / updates available / error | ✅ |
-| Desktop notification on first update detection | ✅ |
-| Close-to-tray (window hides, process stays running) | ✅ |
-| Reboot detection (3-method cascade) + modal prompt | ✅ |
-| Auto background checks (configurable interval) | ✅ |
-| Battery-aware: skip auto-check on battery, retry in 30 min | ✅ |
-| Package list preview dialog | ✅ |
-| Snapper pre/post snapshot pair around zypper dup | ✅ |
-| Persistent update history log (JSONL) | ✅ |
-| History tab with reverse-chronological list | ✅ |
-| "Check for updates on launch" toggle | ✅ |
+- **One-click system updates** via `zypper dup` with live streaming output
+- **System tray integration** using KStatusNotifierItem — Wayland-compatible, reflects update/ok/error state
+- **Desktop notifications** via KNotification when updates become available
+- **Automatic background checks** on a configurable interval (1–24 h) with battery awareness — skips the check and retries in 30 minutes when running on battery
+- **Reboot detection** after kernel, glibc, or systemd updates, using a three-method cascade: `/run/reboot-required`, zypper output keywords, and a live `uname -r` vs installed kernel comparison
+- **Snapper pre/post snapshots** bracketing every `zypper dup` run — snapshot numbers are shown in the status view so you always know your rollback point
+- **Optional Flatpak updates** run after `zypper dup` with output streamed to the same live log
+- **Persistent update history** — every check and apply is appended to a JSONL log at `~/.local/share/TumbleweedUpdater/history.log`, browsable in the History tab
+- **KDE-native settings page** built with Kirigami FormLayout — auto-check interval, Snapper toggle, Flatpak toggle, all persisted via KConfig
+- **Privilege separation** — the GUI never runs as root; `zypper dup` and `systemctl reboot` are invoked via `pkexec`
 
 ---
 
-## Architecture
+## What this is
 
-Two binaries are built:
+- A one-button system updater for KDE Plasma on Tumbleweed
+- A safe wrapper around `zypper dup` with sane defaults
+- A tray app that stays out of your way until it matters
 
-**`twu-ctl`** — unprivileged controller (C++20, no Qt dependency)
-- Runs `zypper lu` for status checks (as the current user)
-- Runs `zypper dup` for updates (via `pkexec`, as root)
-- Creates Snapper pre/post snapshots around each apply
-- Writes structured JSONL to `~/.local/share/TumbleweedUpdater/history.log`
-- Emits a single JSON object on stdout; the GUI reads and parses it
+## What this is not
 
-**`tumbleweed-updater`** — Qt6/Kirigami GUI (unprivileged)
-- Communicates with the controller via stdout/stdin (no D-Bus IPC)
-- Never runs as root; privilege escalation is delegated to pkexec
-- Persists settings via KConfig (`~/.config/TumbleweedUpdaterrc`)
-- Reads history log from the XDG data directory
+- A package manager
+- A replacement for zypper, YaST, libzypp, or Myrlyn
+- A tool for installing, removing, or searching packages
+- Cross-distribution or GNOME software
+
+If a requested feature resembles a package manager, it is out of scope. See [PROJECT_CHARTER.md](PROJECT_CHARTER.md).
 
 ---
 
-## Build
+## Screenshots
+
+<!-- Screenshots coming soon — add before submission to OBS/KDE review -->
+
+---
+
+## Building from source
 
 ### Dependencies
 
-| Package | Purpose |
+| Component | Packages |
 |---|---|
-| `cmake >= 3.22` | Build system |
-| `extra-cmake-modules` | KDE CMake helpers |
-| `qt6-base-devel` | Qt6 Core, Gui, Widgets, DBus |
-| `qt6-declarative-devel` | Qt6 Qml, Quick |
-| `qt6-quickcontrols2-devel` | Qt6 QuickControls2 |
-| `kf6-kirigami-devel` | Kirigami UI framework |
-| `kf6-knotifications-devel` | Desktop notifications |
-| `kf6-kstatusnotifieritem-devel` | System tray |
-| `kf6-kconfig-devel` | Settings persistence |
-| `snapper` (optional) | Pre/post update snapshots |
+| Build tools | `cmake >= 3.22`, `extra-cmake-modules` |
+| Qt 6 | `qt6-base-devel`, `qt6-declarative-devel`, `qt6-quickcontrols2-devel` |
+| KDE Frameworks 6 | `kf6-kirigami-devel`, `kf6-knotifications-devel`, `kf6-kstatusnotifieritem-devel`, `kf6-kconfig-devel` |
+| Optional | `snapper` (for snapshot integration), `flatpak` (for Flatpak update support) |
 
-Install on Tumbleweed:
+Install build dependencies on openSUSE Tumbleweed:
 
 ```bash
 sudo zypper install cmake extra-cmake-modules \
@@ -96,82 +67,80 @@ sudo zypper install cmake extra-cmake-modules \
     kf6-kstatusnotifieritem-devel kf6-kconfig-devel
 ```
 
-### Build steps
+### Build
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-```
-
-### Install
-
-```bash
 sudo cmake --install build
 ```
 
-This installs:
-- `/usr/bin/twu-ctl` — the controller
-- `/usr/bin/tumbleweed-updater` — the GUI
-- `/usr/share/knotifications6/TumbleweedUpdater.notifyrc` — notification config
+This installs two binaries and a KNotification config file:
+
+```
+/usr/bin/tumbleweed-updater           # GUI (run as your normal user)
+/usr/bin/twu-ctl                      # Controller (invoked by the GUI)
+/usr/share/knotifications6/TumbleweedUpdater.notifyrc
+```
 
 ---
 
-## Running (from build directory)
+## Running
 
 ```bash
-# Install the controller to its expected path first, or set a custom path
-# in src/gui/main.cpp:findTwuCtl()
-
-./build/src/gui/tumbleweed-updater
+tumbleweed-updater
 ```
+
+The app starts minimised to the system tray. Left-click the tray icon to show or hide the window. Right-click for Check Now, Show Window, and Quit.
+
+**Requirements at runtime:**
+
+- `twu-ctl` must be installed to `/usr/bin/twu-ctl` — the GUI looks for it there.
+- Snapper integration requires Snapper to be installed and a `root` configuration to exist (`snapper list` should work without errors). If Snapper is absent the update proceeds normally; snapshots are silently skipped.
+- Flatpak support requires `/usr/bin/flatpak` to be present and is off by default. Enable it in Settings.
 
 ---
 
 ## Configuration
 
-### Auto-check interval
+All settings are persisted in `~/.config/TumbleweedUpdaterrc` and editable through the in-app Settings page (gear icon in the toolbar).
 
-The background check interval is read from KConfig. Default is 4 hours.
+```ini
+[AutoCheck]
+Enabled=true
+IntervalHours=4
 
-To change to 2 hours:
+[Snapper]
+Enabled=true
 
-```bash
-kwriteconfig6 --file TumbleweedUpdaterrc --group AutoCheck --key IntervalHours 2
+[Flatpak]
+Enabled=false
 ```
 
-### Snapper snapshots
-
-Snapshots are enabled by default if `snapper` is installed. To disable:
-
-```bash
-mkdir -p ~/.config/TumbleweedUpdater
-echo "SnapperEnabled=false" > ~/.config/TumbleweedUpdater/controller.conf
-```
-
-### History log
-
-The history log is written by the controller to:
-
-```
-~/.local/share/TumbleweedUpdater/history.log
-```
-
-Each line is a JSON object (JSONL format) and is human-readable with `cat` or
-any text editor. The GUI History tab displays the 100 most recent entries.
+The controller reads this file directly (it has no Qt dependency), so there is no separate config file to keep in sync.
 
 ---
 
-## Files written
+## Architecture
 
-| Path | Written by | Contents |
-|---|---|---|
-| `~/.config/TumbleweedUpdaterrc` | GUI | KConfig settings (autocheck interval, launch toggle) |
-| `~/.config/TumbleweedUpdater/settings.ini` | GUI | Qt Settings (autocheck on launch) |
-| `~/.config/TumbleweedUpdater/controller.conf` | User | Optional controller overrides (SnapperEnabled) |
-| `~/.local/share/TumbleweedUpdater/history.log` | Controller | JSONL update history |
+The project is intentionally split into two binaries to enforce privilege separation.
+
+**`tumbleweed-updater`** is the Qt6/Kirigami GUI. It runs as your normal user account for its entire lifetime. It communicates with the controller by launching it as a child process and reading its stdout. It never calls zypper directly and never elevates its own privileges.
+
+**`twu-ctl`** is a standalone C++20 controller with no Qt dependency. For read-only operations (`status`) it runs as the current user. For mutating operations (`apply`) the GUI launches it under `pkexec`, which prompts for authentication via Polkit before granting root. The controller streams zypper output line-by-line to stdout, then emits a single JSON object as the final line with the structured result (exit status, package count, reboot flag, snapshot numbers). The GUI parses this JSON to update the UI and append a history record.
+
+This separation means a bug in the GUI cannot silently acquire root, and the controller can be audited, replaced, or tested without touching the UI layer.
+
+---
+
+## Contributing
+
+Contributions are welcome. Before proposing a feature, read [PROJECT_CHARTER.md](PROJECT_CHARTER.md) — it defines scope clearly. The short version: if it resembles a package manager, it is out of scope.
+
+The project follows [KDE coding style](https://community.kde.org/Policies/Coding_Style). C++ uses the KDE/Qt naming conventions; QML follows the Kirigami component patterns used in other KDE applications.
 
 ---
 
 ## License
 
-GPL 2.0
+[GPL 2.0](LICENSE)
