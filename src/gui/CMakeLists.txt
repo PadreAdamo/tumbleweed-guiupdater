@@ -60,5 +60,8 @@ target_link_libraries(tumbleweed-updater PRIVATE
     ${KF6_CONFIGCORE_LIB}
 )
 
+install(TARGETS tumbleweed-updater
+        RUNTIME DESTINATION ${KDE_INSTALL_BINDIR})
+
 install(FILES TumbleweedUpdater.notifyrc
-        DESTINATION ${KDE_INSTALL_KNOTIFYRCDIR})
+        DESTINATION ${KDE_INSTALL_DATADIR}/knotifications6)

@@ -15,3 +15,7 @@ include(KDECompilerSettings NO_POLICY_SCOPE)
 
 add_subdirectory(src/gui)
 add_subdirectory(src/controller)
+
+# Polkit policy — allows pkexec to run twu-ctl apply as root
+install(FILES polkit/org.padreadamo.tumbleweedupdater.policy
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
