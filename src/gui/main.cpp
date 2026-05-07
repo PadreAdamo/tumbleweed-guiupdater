@@ -178,6 +178,7 @@ int main(int argc, char *argv[])
     app.setQuitOnLastWindowClosed(false);
 
     QGuiApplication::setDesktopFileName(QStringLiteral("tumbleweed-updater"));
+    QGuiApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("tumbleweed-updater")));
 
     QCoreApplication::setOrganizationName("TumbleweedUpdater");
     QCoreApplication::setOrganizationDomain("tumbleweedupdater.local");

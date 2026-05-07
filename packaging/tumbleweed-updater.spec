@@ -68,7 +68,7 @@ is enforced: the GUI never runs as root — only the small controller binary
 %{_datadir}/knotifications6/TumbleweedUpdater.notifyrc
 %{_datadir}/polkit-1/actions/org.padreadamo.tumbleweedupdater.policy
 %{_datadir}/applications/tumbleweed-updater.desktop
-# %%{_datadir}/icons/hicolor/scalable/apps/tumbleweed-updater.svg
+%{_datadir}/icons/hicolor/scalable/apps/tumbleweed-updater.svg
 
 %changelog
 * Thu May 07 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.0-0

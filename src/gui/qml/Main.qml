@@ -9,6 +9,7 @@ Kirigami.ApplicationWindow {
     height: 500
     visible: true
     title: "Tumbleweed Updater"
+    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.ToolBar
 
     onClosing: function(close) {
         close.accepted = false
