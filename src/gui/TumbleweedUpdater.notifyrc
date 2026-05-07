@@ -1,0 +1,10 @@
+[Global]
+Name=Tumbleweed Updater
+IconName=system-software-update
+Comment=Notifications about system updates
+
+[Event/updateAvailable]
+Name=Updates Available
+Comment=System updates are ready to install
+Action=Popup
+Urgency=Normal

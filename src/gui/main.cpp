@@ -1,6 +1,7 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QQmlApplicationEngine>
+#include <QQuickWindow>
 #include <QUrl>
 #include <QTimer>
 #include <QProcess>
@@ -9,6 +10,26 @@
 #include <QJsonParseError>
 #include <QDateTime>
 #include <QTimeZone>
+#include <QMenu>
+#include <QAction>
+#include <QIcon>
+
+#include <KStatusNotifierItem>
+#include <KNotification>
+#include <KSharedConfig>
+#include <KConfigGroup>
+
+#include <cstdio>
+
+static bool isOnBattery()
+{
+    FILE *f = fopen("/sys/class/power_supply/AC/online", "r");
+    if (!f) return false;
+    char buf[4] = {};
+    const bool read = fgets(buf, sizeof(buf), f) != nullptr;
+    fclose(f);
+    return read && buf[0] == '0';
+}
 
 static QString findTwuCtl()
 {
@@ -29,7 +50,11 @@ struct UiStatus {
     QString kind;
     QString text;
     bool updatesAvailable = false;
+    bool rebootRequired = false;
     QString packageList;
+    bool snapperUsed = false;
+    int snapshotPre  = -1;
+    int snapshotPost = -1;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -60,7 +85,11 @@ static UiStatus parseStatusJson(const QString &out)
     const QString suffix = ts.isEmpty() ? QString() : QString(" • %1").arg(ts);
 
     s.updatesAvailable = updates;
+    s.rebootRequired = rebootRequired;
     s.packageList = packageList;
+    s.snapperUsed = o["snapperUsed"].toBool();
+    s.snapshotPre  = o["snapshotPre"].toInt(-1);
+    s.snapshotPost = o["snapshotPost"].toInt(-1);
 
     if (!ok) {
         if (needsAuth) {
@@ -112,9 +141,36 @@ static void setProp(QObject *root, const char *name, const QVariant &v)
         root->setProperty(name, v);
 }
 
+// Update the tray icon and tooltip to reflect the latest status.
+static void updateTray(KStatusNotifierItem *tray, const UiStatus &st)
+{
+    if (st.updatesAvailable) {
+        tray->setIconByName(QStringLiteral("update-low"));
+        tray->setStatus(KStatusNotifierItem::NeedsAttention);
+        tray->setToolTip(QStringLiteral("update-low"),
+                         QStringLiteral("Tumbleweed Updater"),
+                         QStringLiteral("Updates are available"));
+    } else if (st.kind == "error" || st.kind == "lock") {
+        tray->setIconByName(QStringLiteral("dialog-error"));
+        tray->setStatus(KStatusNotifierItem::Active);
+        tray->setToolTip(QStringLiteral("dialog-error"),
+                         QStringLiteral("Tumbleweed Updater"),
+                         QStringLiteral("Could not check for updates"));
+    } else {
+        tray->setIconByName(QStringLiteral("update-none"));
+        tray->setStatus(KStatusNotifierItem::Active);
+        tray->setToolTip(QStringLiteral("update-none"),
+                         QStringLiteral("Tumbleweed Updater"),
+                         QStringLiteral("System is up to date"));
+    }
+}
+
 int main(int argc, char *argv[])
 {
-    QGuiApplication app(argc, argv);
+    // QApplication (not QGuiApplication) because KStatusNotifierItem's context
+    // menu is a QMenu which requires the widget subsystem.
+    QApplication app(argc, argv);
+    app.setQuitOnLastWindowClosed(false);
 
     QCoreApplication::setOrganizationName("TumbleweedUpdater");
     QCoreApplication::setOrganizationDomain("tumbleweedupdater.local");
@@ -138,33 +194,136 @@ int main(int argc, char *argv[])
         return 1;
 
     QObject *root = engine.rootObjects().first();
+    QQuickWindow *window = qobject_cast<QQuickWindow *>(root);
+
+    // ---- Auto-check interval from KConfig ----
+
+    auto cfg = KSharedConfig::openConfig();
+    KConfigGroup grp = cfg->group(QStringLiteral("AutoCheck"));
+    const int intervalHours = grp.readEntry("IntervalHours", 4);
+    const int intervalMs = intervalHours * 60 * 60 * 1000;
+
+    QTimer autoCheckTimer;
+    autoCheckTimer.setSingleShot(true);
+
+    // ---- Tray icon ----
+
+    // Declare before lambdas so [&] captures the pointer variable correctly;
+    // the pointer is assigned below, before the event loop starts.
+    KStatusNotifierItem *tray = nullptr;
+    bool lastUpdatesAvailable = false;
 
     QProcess proc;
+    bool applyInProgress = false;
+    QString stdoutAccum;
+
+    // Helper: show/raise the main window
+    auto showWindow = [window]() {
+        window->show();
+        window->raise();
+        window->requestActivate();
+    };
+
+    // During apply, stream each chunk into the QML log as it arrives.
+    QObject::connect(&proc, &QProcess::readyReadStandardOutput, &app,
+        [&]() {
+            const auto data = QString::fromUtf8(proc.readAllStandardOutput());
+            stdoutAccum += data;
+            if (applyInProgress)
+                setProp(root, "applyLog", stdoutAccum);
+        });
 
     QObject::connect(&proc, &QProcess::finished, &app,
-                     [&](int exitCode, QProcess::ExitStatus exitStatus) {
-                         const QString out = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
-                         const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+        [&](int exitCode, QProcess::ExitStatus exitStatus) {
+            // Drain any data that arrived after the last readyReadStandardOutput
+            stdoutAccum += QString::fromUtf8(proc.readAllStandardOutput());
+            const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
 
-                         UiStatus st;
+            UiStatus st;
 
-                         if (exitStatus != QProcess::NormalExit) {
-                             st.kind = "error";
-                             st.text = "❌ Controller crashed";
-                         } else if (exitCode != 0 && out.isEmpty()) {
-                             st.kind = "error";
-                             st.text = err.isEmpty() ? QString("❌ Error: exit %1").arg(exitCode)
-                             : QString("❌ Error: %1").arg(err);
-                         } else {
-                             st = parseStatusJson(out);
-                         }
+            if (exitStatus != QProcess::NormalExit) {
+                st.kind = "error";
+                st.text = "❌ Controller crashed";
+            } else if (applyInProgress) {
+                // The controller writes plain-text zypper lines then a JSON object
+                // as the final line. Find that JSON line working backwards.
+                const QStringList lines = stdoutAccum.split('\n', Qt::SkipEmptyParts);
+                QString jsonLine;
+                int jsonIdx = -1;
+                for (int i = lines.size() - 1; i >= 0; --i) {
+                    if (lines[i].trimmed().startsWith('{')) {
+                        jsonLine = lines[i].trimmed();
+                        jsonIdx  = i;
+                        break;
+                    }
+                }
 
-                         setProp(root, "statusKind", st.kind);
-                         setProp(root, "statusText", st.text);
-                         setProp(root, "updatesAvailable", st.updatesAvailable);
-                         setProp(root, "packageList", st.packageList);
-                         setProp(root, "busy", false);
-                     });
+                if (jsonLine.isEmpty()) {
+                    // pkexec auth cancellation or other failure before zypper ran
+                    st.kind = "error";
+                    st.text = err.isEmpty()
+                        ? QString("❌ Apply failed (exit %1)").arg(exitCode)
+                        : QString("❌ %1").arg(err);
+                } else {
+                    // Show only the zypper output (pre-JSON lines) in the log
+                    const QStringList logLines = lines.mid(0, jsonIdx);
+                    setProp(root, "applyLog", logLines.join('\n'));
+                    st = parseStatusJson(jsonLine);
+
+                    if (st.rebootRequired) {
+                        st.kind = "warn";
+                        st.text = "⚠️ Updates applied — reboot recommended";
+                    }
+                }
+            } else {
+                // Status command: entire stdout is one JSON object
+                const QString out = stdoutAccum.trimmed();
+                if (exitCode != 0 && out.isEmpty()) {
+                    st.kind = "error";
+                    st.text = err.isEmpty()
+                        ? QString("❌ Error: exit %1").arg(exitCode)
+                        : QString("❌ Error: %1").arg(err);
+                } else {
+                    st = parseStatusJson(out);
+                }
+            }
+
+            if (applyInProgress && st.snapperUsed)
+                st.text += QString("\n📸 Snapshots #%1 (pre) and #%2 (post) created")
+                               .arg(st.snapshotPre).arg(st.snapshotPost);
+
+            setProp(root, "statusKind", st.kind);
+            setProp(root, "statusText", st.text);
+            setProp(root, "updatesAvailable", st.updatesAvailable);
+            setProp(root, "packageList", st.packageList);
+            setProp(root, "busy", false);
+
+            // Fire reboot dialog only after a successful apply, once busy is clear.
+            if (applyInProgress && st.rebootRequired) {
+                setProp(root, "rebootRequired", true);
+                setProp(root, "showRebootDialog", true);
+            }
+
+            applyInProgress = false;
+
+            // Update tray to reflect the new status
+            if (tray)
+                updateTray(tray, st);
+
+            // Show a desktop notification the first time updates are detected.
+            if (st.updatesAvailable && !lastUpdatesAvailable) {
+                auto *notif = new KNotification(
+                    QStringLiteral("updateAvailable"),
+                    KNotification::CloseOnTimeout,
+                    &app
+                );
+                notif->setTitle(QStringLiteral("Updates Available"));
+                notif->setText(QStringLiteral("Your system has updates ready to install."));
+                notif->setIconName(QStringLiteral("update-low"));
+                notif->sendEvent();
+            }
+            lastUpdatesAvailable = st.updatesAvailable;
+        });
 
     QTimer poll;
     poll.setInterval(150);
@@ -179,11 +338,23 @@ int main(int argc, char *argv[])
                 return;
             }
 
+            applyInProgress = false;
+            stdoutAccum.clear();
+            setProp(root, "applyLog", QString());
+
+            if (tray) {
+                tray->setIconByName(QStringLiteral("view-refresh"));
+                tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
+                tray->setStatus(KStatusNotifierItem::Active);
+            }
+
             proc.start(findTwuCtl(), {"status"});
             if (!proc.waitForStarted(1000)) {
                 setProp(root, "statusKind", "error");
                 setProp(root, "statusText", "❌ Error: could not start controller");
                 setProp(root, "busy", false);
+            } else {
+                autoCheckTimer.start(intervalMs);
             }
         }
 
@@ -196,14 +367,111 @@ int main(int argc, char *argv[])
                 return;
             }
 
+            applyInProgress = true;
+            stdoutAccum.clear();
+            setProp(root, "applyLog", QString());
+            setProp(root, "rebootRequired", false);
+
+            if (tray) {
+                tray->setIconByName(QStringLiteral("view-refresh"));
+                tray->setToolTipTitle(QStringLiteral("Applying updates…"));
+                tray->setStatus(KStatusNotifierItem::Active);
+            }
+
             proc.start("pkexec", {findTwuCtl(), "apply"});
             if (!proc.waitForStarted(1000)) {
                 setProp(root, "statusKind", "error");
                 setProp(root, "statusText", "❌ Error: could not start apply");
                 setProp(root, "busy", false);
+                applyInProgress = false;
+            } else {
+                autoCheckTimer.start(intervalMs);
             }
         }
+
+        if (root->property("runRebootRequested").toBool()) {
+            root->setProperty("runRebootRequested", false);
+            QProcess::startDetached("pkexec", {"systemctl", "reboot"});
+        }
     });
+
+    // ---- Build the tray icon ----
+
+    tray = new KStatusNotifierItem(QStringLiteral("tumbleweed-updater"), &app);
+    tray->setCategory(KStatusNotifierItem::ApplicationStatus);
+    tray->setStatus(KStatusNotifierItem::Active);
+    tray->setTitle(QStringLiteral("Tumbleweed Updater"));
+    tray->setIconByName(QStringLiteral("view-refresh"));
+    tray->setToolTip(QStringLiteral("view-refresh"),
+                     QStringLiteral("Tumbleweed Updater"),
+                     QStringLiteral("Checking for updates…"));
+    tray->setAssociatedWindow(window);
+
+    // Context menu
+    auto *trayMenu = new QMenu();
+
+    auto *checkAction = trayMenu->addAction(
+        QIcon::fromTheme(QStringLiteral("view-refresh")),
+        QStringLiteral("Check Now"));
+
+    auto *showAction = trayMenu->addAction(
+        QIcon::fromTheme(QStringLiteral("window-restore")),
+        QStringLiteral("Show Window"));
+
+    trayMenu->addSeparator();
+
+    auto *quitAction = trayMenu->addAction(
+        QIcon::fromTheme(QStringLiteral("application-exit")),
+        QStringLiteral("Quit"));
+
+    tray->setContextMenu(trayMenu);
+
+    // Left-click: toggle window visibility
+    QObject::connect(tray, &KStatusNotifierItem::activateRequested, &app,
+        [window, showWindow](bool /*active*/, const QPoint &) {
+            if (window->isVisible())
+                window->hide();
+            else
+                showWindow();
+        });
+
+    QObject::connect(checkAction, &QAction::triggered, &app, [root, tray]() {
+        if (root->property("busy").toBool())
+            return;
+        root->setProperty("busy", true);
+        root->setProperty("statusText", "Checking for updates…");
+        root->setProperty("statusKind", "ok");
+        root->setProperty("runStatusRequested", true);
+        tray->setIconByName(QStringLiteral("view-refresh"));
+        tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
+        tray->setStatus(KStatusNotifierItem::Active);
+    });
+
+    QObject::connect(showAction, &QAction::triggered, &app, showWindow);
+
+    QObject::connect(quitAction, &QAction::triggered, &app, &QApplication::quit);
+
+    QObject::connect(&autoCheckTimer, &QTimer::timeout, &app, [&]() {
+        if (isOnBattery()) {
+            fprintf(stderr, "[auto-check] on battery — rescheduling in 30 minutes\n");
+            autoCheckTimer.start(30 * 60 * 1000);
+            return;
+        }
+        autoCheckTimer.start(intervalMs);
+        if (root->property("busy").toBool()) return;
+        fprintf(stderr, "[auto-check] triggering background status check\n");
+        root->setProperty("busy", true);
+        root->setProperty("statusText", "Checking for updates…");
+        root->setProperty("statusKind", "ok");
+        root->setProperty("runStatusRequested", true);
+        if (tray) {
+            tray->setIconByName(QStringLiteral("view-refresh"));
+            tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
+            tray->setStatus(KStatusNotifierItem::Active);
+        }
+    });
+
+    autoCheckTimer.start(intervalMs);
 
     poll.start();
     return app.exec();

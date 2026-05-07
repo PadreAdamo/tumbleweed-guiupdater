@@ -3,8 +3,10 @@
 #include <chrono>
 #include <ctime>
 #include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <vector>
+#include <filesystem>
 
 static std::string iso8601_now_utc()
 {
@@ -183,6 +185,149 @@ static bool compute_reboot_required(const std::string &packageList)
     });
 }
 
+// ---- reboot detection after apply ----
+
+static bool reboot_required_file()
+{
+    FILE *f = fopen("/run/reboot-required", "r");
+    if (f) { fclose(f); return true; }
+    return false;
+}
+
+static bool running_kernel_differs_from_installed()
+{
+    // uname -r gives e.g. "6.8.9-1-default"
+    std::string running;
+    {
+        FILE *p = popen("uname -r 2>/dev/null", "r");
+        if (!p) return false;
+        std::array<char, 128> buf{};
+        if (fgets(buf.data(), buf.size(), p))
+            running = buf.data();
+        pclose(p);
+        while (!running.empty() &&
+               (running.back() == '\n' || running.back() == '\r'))
+            running.pop_back();
+    }
+    if (running.empty()) return false;
+
+    // Strip the flavor suffix to get "version-release", e.g. "6.8.9-1"
+    const size_t lastDash = running.rfind('-');
+    if (lastDash == std::string::npos) return false;
+    const std::string verRel = running.substr(0, lastDash);
+
+    // rpm -q kernel-default returns "kernel-default-6.8.9-1.1.x86_64".
+    // Search for "verRel." so "6.8.9-1." matches "6.8.9-1.1.x86_64" but not
+    // a newer "6.9.0-2.1.x86_64".
+    std::string installed;
+    {
+        FILE *p = popen("rpm -q kernel-default 2>/dev/null", "r");
+        if (!p) return false;
+        std::array<char, 512> buf{};
+        while (fgets(buf.data(), buf.size(), p))
+            installed += buf.data();
+        pclose(p);
+    }
+    if (installed.empty() || installed.find("not installed") != std::string::npos)
+        return false;
+
+    return installed.find(verRel + ".") == std::string::npos;
+}
+
+static bool compute_apply_reboot_required(const std::string &zypperOutput)
+{
+    // Primary: distro marker file written by some zypper plugins
+    if (reboot_required_file())
+        return true;
+
+    // Secondary: critical packages appear in the zypper dup output
+    if (contains_any(zypperOutput, {
+            "kernel-default", "kernel-",
+            "glibc", "systemd", "dbus",
+            "udev", "dracut",
+        }))
+        return true;
+
+    // Tertiary: running kernel differs from the now-installed kernel package
+    if (running_kernel_differs_from_installed())
+        return true;
+
+    return false;
+}
+
+// ---- Snapper integration ----
+
+static bool read_snapper_enabled()
+{
+    const char *home = std::getenv("HOME");
+    if (!home) return true;
+
+    const std::string path =
+        std::string(home) + "/.config/TumbleweedUpdater/controller.conf";
+
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) return true;
+
+    char buf[256];
+    bool result = true;
+    while (fgets(buf, sizeof(buf), f)) {
+        const std::string line = trim_copy(std::string(buf));
+        if (line.rfind("SnapperEnabled=", 0) == 0) {
+            result = (line.substr(15) != "false");
+            break;
+        }
+    }
+    fclose(f);
+    return result;
+}
+
+static int create_pre_snapshot()
+{
+    if (!std::filesystem::exists("/usr/bin/snapper"))
+        return -1;
+
+    std::string output;
+    const int rc = run_command_capture(
+        "snapper --csvout create --type pre --print-number"
+        " --description \"Tumbleweed Updater: pre-update\""
+        " --cleanup-algorithm number 2>/dev/null",
+        output);
+
+    if (rc != 0) return -1;
+
+    const std::string trimmed = trim_copy(output);
+    if (trimmed.empty()) return -1;
+
+    char *end = nullptr;
+    const long n = std::strtol(trimmed.c_str(), &end, 10);
+    return (end != trimmed.c_str() && n > 0) ? static_cast<int>(n) : -1;
+}
+
+static int create_post_snapshot(int pre_num)
+{
+    if (!std::filesystem::exists("/usr/bin/snapper"))
+        return -1;
+
+    const std::string cmd =
+        "snapper --csvout create --type post --pre-number " +
+        std::to_string(pre_num) +
+        " --print-number"
+        " --description \"Tumbleweed Updater: post-update\""
+        " --cleanup-algorithm number 2>/dev/null";
+
+    std::string output;
+    const int rc = run_command_capture(cmd, output);
+
+    if (rc != 0) return -1;
+
+    const std::string trimmed = trim_copy(output);
+    if (trimmed.empty()) return -1;
+
+    char *end = nullptr;
+    const long n = std::strtol(trimmed.c_str(), &end, 10);
+    return (end != trimmed.c_str() && n > 0) ? static_cast<int>(n) : -1;
+}
+
 static int cmd_status()
 {
     const std::string timestamp = iso8601_now_utc();
@@ -282,30 +427,106 @@ static int cmd_status()
 
 static int cmd_apply()
 {
-    const std::string zypperApply = "zypper -n dup 2>&1";
+    const std::string timestamp = iso8601_now_utc();
+    const bool snapperEnabled = read_snapper_enabled();
+
+    int snapshotPre  = -1;
+    int snapshotPost = -1;
+    bool snapperUsed = false;
+
+    if (snapperEnabled) {
+        snapshotPre = create_pre_snapshot();
+        if (snapshotPre < 0)
+            fprintf(stderr, "[snapper] pre-snapshot failed or snapper unavailable — continuing without snapshot\n");
+    }
+
+    const std::string zypperCmd = "zypper -n dup 2>&1";
 
     std::string output;
-    const int rc = run_command_capture(zypperApply, output);
+    bool ok = false;
 
-    const std::string timestamp = iso8601_now_utc();
-    const bool ok = (rc == 0);
+    FILE *pipe = popen(zypperCmd.c_str(), "r");
+    if (!pipe) {
+        // Still attempt post-snapshot so the pair is balanced if pre succeeded
+        if (snapperEnabled && snapshotPre >= 0) {
+            snapshotPost = create_post_snapshot(snapshotPre);
+            snapperUsed  = (snapshotPost >= 0);
+        }
+        std::cout
+            << "{"
+            << "\"ok\":false,"
+            << "\"summary\":\"Failed to start zypper\","
+            << "\"details\":\"popen failed\","
+            << "\"packagePreview\":\"\","
+            << "\"packageList\":\"\","
+            << "\"updateCount\":0,"
+            << "\"updatesAvailable\":false,"
+            << "\"rebootRequired\":false,"
+            << "\"needsAuth\":false,"
+            << "\"snapshotPre\":" << snapshotPre << ","
+            << "\"snapshotPost\":" << snapshotPost << ","
+            << "\"snapperUsed\":" << (snapperUsed ? "true" : "false") << ","
+            << "\"timestamp\":\"" << json_escape(timestamp) << "\""
+            << "}\n";
+        std::cout.flush();
+        return 1;
+    }
 
-    const std::string summary = ok ? "Update complete" : "Update failed";
-    const std::string details = output;
+    std::array<char, 4096> buf{};
+    while (fgets(buf.data(), static_cast<int>(buf.size()), pipe) != nullptr) {
+        const std::string chunk = buf.data();
+        output += chunk;
+        std::cout << chunk;
+        std::cout.flush();
+    }
+
+    const int rc = pclose(pipe);
+    ok = (rc == 0);
+
+    if (snapperEnabled && snapshotPre >= 0) {
+        snapshotPost = create_post_snapshot(snapshotPre);
+        if (snapshotPost < 0)
+            fprintf(stderr, "[snapper] post-snapshot failed\n");
+        else
+            snapperUsed = true;
+    }
+
+    const bool needsAuth = !ok && contains_any(output, {
+        "Root privileges are required",
+        "root privileges",
+        "requires root",
+        "Permission denied",
+        "permission denied",
+        "You must be root"
+    });
+
+    const bool rebootRequired = ok && compute_apply_reboot_required(output);
+
+    const std::string summary = ok          ? "Update complete"
+                               : needsAuth  ? "Permission denied"
+                                            : "Update failed";
+
+    // Ensure the JSON result starts on its own line
+    if (!output.empty() && output.back() != '\n')
+        std::cout << '\n';
 
     std::cout
         << "{"
         << "\"ok\":" << (ok ? "true" : "false") << ","
         << "\"summary\":\"" << json_escape(summary) << "\","
-        << "\"details\":\"" << json_escape(details) << "\","
+        << "\"details\":\"\","
         << "\"packagePreview\":\"\","
         << "\"packageList\":\"\","
         << "\"updateCount\":0,"
         << "\"updatesAvailable\":false,"
-        << "\"rebootRequired\":false,"
-        << "\"needsAuth\":true,"
+        << "\"rebootRequired\":" << (rebootRequired ? "true" : "false") << ","
+        << "\"needsAuth\":" << (needsAuth ? "true" : "false") << ","
+        << "\"snapshotPre\":" << snapshotPre << ","
+        << "\"snapshotPost\":" << snapshotPost << ","
+        << "\"snapperUsed\":" << (snapperUsed ? "true" : "false") << ","
         << "\"timestamp\":\"" << json_escape(timestamp) << "\""
         << "}\n";
+    std::cout.flush();
 
     return ok ? 0 : 1;
 }
