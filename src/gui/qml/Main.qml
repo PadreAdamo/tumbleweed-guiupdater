@@ -496,12 +496,13 @@ Kirigami.ApplicationWindow {
                     model: historyTab.entries
                     clip: true
 
-                    delegate: Kirigami.BasicListItem {
+                    delegate: Kirigami.SubtitleDelegate {
                         required property var modelData
                         required property int index
 
+                        width: ListView.view.width
                         readonly property var _fmt: root.formatHistoryEntry(modelData)
-                        label: _fmt.label
+                        text: _fmt.label
                         subtitle: _fmt.subtitle
                     }
                 }
