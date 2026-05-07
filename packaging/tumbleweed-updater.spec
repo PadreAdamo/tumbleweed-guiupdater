@@ -9,7 +9,7 @@ Release:        0
 Summary:        KDE-native GUI system updater for openSUSE Tumbleweed
 License:        GPL-2.0-only
 Group:          System/GUI/KDE
-URL:            https://github.com/padreadamo/tumbleweed-guiupdater
+URL:            https://github.com/PadreAdamo/tumbleweed-guiupdater
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cmake >= 3.22
@@ -19,6 +19,7 @@ BuildRequires:  pkgconfig(Qt6Gui)
 BuildRequires:  pkgconfig(Qt6Qml)
 BuildRequires:  pkgconfig(Qt6Quick)
 BuildRequires:  pkgconfig(Qt6QuickControls2)
+BuildRequires:  pkgconfig(Qt6Widgets)
 BuildRequires:  pkgconfig(Qt6DBus)
 BuildRequires:  kf6-kirigami-devel
 BuildRequires:  kf6-knotifications-devel
