@@ -159,21 +159,21 @@ static void setProp(QObject *root, const char *name, const QVariant &v)
 static void updateTray(KStatusNotifierItem *tray, const UiStatus &st)
 {
     if (st.updatesAvailable) {
-        tray->setIconByName(QStringLiteral("update-low"));
+        tray->setIconByName(QStringLiteral("tumbleweed-updater"));
         tray->setStatus(KStatusNotifierItem::NeedsAttention);
-        tray->setToolTip(QStringLiteral("update-low"),
+        tray->setToolTip(QStringLiteral("tumbleweed-updater"),
                          QStringLiteral("Tumbleweed Updater"),
                          QStringLiteral("Updates are available"));
     } else if (st.kind == "error" || st.kind == "lock") {
-        tray->setIconByName(QStringLiteral("dialog-error"));
+        tray->setIconByName(QStringLiteral("tumbleweed-updater"));
         tray->setStatus(KStatusNotifierItem::Active);
-        tray->setToolTip(QStringLiteral("dialog-error"),
+        tray->setToolTip(QStringLiteral("tumbleweed-updater"),
                          QStringLiteral("Tumbleweed Updater"),
                          QStringLiteral("Could not check for updates"));
     } else {
-        tray->setIconByName(QStringLiteral("update-none"));
+        tray->setIconByName(QStringLiteral("tumbleweed-updater"));
         tray->setStatus(KStatusNotifierItem::Active);
-        tray->setToolTip(QStringLiteral("update-none"),
+        tray->setToolTip(QStringLiteral("tumbleweed-updater"),
                          QStringLiteral("Tumbleweed Updater"),
                          QStringLiteral("System is up to date"));
     }
@@ -399,7 +399,7 @@ int main(int argc, char *argv[])
             setProp(root, "applyLog", QString());
 
             if (tray) {
-                tray->setIconByName(QStringLiteral("view-refresh"));
+                tray->setIconByName(QStringLiteral("tumbleweed-updater"));
                 tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
                 tray->setStatus(KStatusNotifierItem::Active);
             }
@@ -429,7 +429,7 @@ int main(int argc, char *argv[])
             setProp(root, "rebootRequired", false);
 
             if (tray) {
-                tray->setIconByName(QStringLiteral("view-refresh"));
+                tray->setIconByName(QStringLiteral("tumbleweed-updater"));
                 tray->setToolTipTitle(QStringLiteral("Applying updates…"));
                 tray->setStatus(KStatusNotifierItem::Active);
             }
@@ -511,8 +511,8 @@ int main(int argc, char *argv[])
     tray->setCategory(KStatusNotifierItem::ApplicationStatus);
     tray->setStatus(KStatusNotifierItem::Active);
     tray->setTitle(QStringLiteral("Tumbleweed Updater"));
-    tray->setIconByName(QStringLiteral("view-refresh"));
-    tray->setToolTip(QStringLiteral("view-refresh"),
+    tray->setIconByName(QStringLiteral("tumbleweed-updater"));
+    tray->setToolTip(QStringLiteral("tumbleweed-updater"),
                      QStringLiteral("Tumbleweed Updater"),
                      QStringLiteral("Checking for updates…"));
     tray->setAssociatedWindow(window);
@@ -552,7 +552,7 @@ int main(int argc, char *argv[])
         root->setProperty("statusText", "Checking for updates…");
         root->setProperty("statusKind", "ok");
         root->setProperty("runStatusRequested", true);
-        tray->setIconByName(QStringLiteral("view-refresh"));
+        tray->setIconByName(QStringLiteral("tumbleweed-updater"));
         tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
         tray->setStatus(KStatusNotifierItem::Active);
     });
@@ -576,7 +576,7 @@ int main(int argc, char *argv[])
         root->setProperty("statusKind", "ok");
         root->setProperty("runStatusRequested", true);
         if (tray) {
-            tray->setIconByName(QStringLiteral("view-refresh"));
+            tray->setIconByName(QStringLiteral("tumbleweed-updater"));
             tray->setToolTipTitle(QStringLiteral("Checking for updates…"));
             tray->setStatus(KStatusNotifierItem::Active);
         }
