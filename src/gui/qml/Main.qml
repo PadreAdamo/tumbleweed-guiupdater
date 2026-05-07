@@ -310,7 +310,10 @@ Kirigami.ApplicationWindow {
             Kirigami.Action {
                 icon.name: "configure"
                 text: "Settings"
-                onTriggered: pageStack.push(settingsPageComponent)
+                onTriggered: {
+                    if (pageStack.depth === 1)
+                        pageStack.push(settingsPageComponent)
+                }
             }
         ]
 
