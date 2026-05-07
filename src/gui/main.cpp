@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonParseError>
 #include <QDateTime>
 #include <QTimeZone>
@@ -59,6 +60,10 @@ struct UiStatus {
     int snapshotPre  = -1;
     int snapshotPost = -1;
     int updateCount  = 0;
+    QString    vendorPolicy;
+    bool       vendorChangeDetected = false;
+    int        vendorChangeCount    = 0;
+    QJsonArray vendorChanges;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -95,6 +100,10 @@ static UiStatus parseStatusJson(const QString &out)
     s.snapshotPre  = o["snapshotPre"].toInt(-1);
     s.snapshotPost = o["snapshotPost"].toInt(-1);
     s.updateCount  = o["updateCount"].toInt();
+    s.vendorPolicy          = o["vendorPolicy"].toString(QStringLiteral("priority"));
+    s.vendorChangeDetected  = o["vendorChangeDetected"].toBool();
+    s.vendorChangeCount     = o["vendorChangeCount"].toInt();
+    s.vendorChanges         = o["vendorChanges"].toArray();
 
     if (!ok) {
         if (needsAuth) {
@@ -219,12 +228,16 @@ int main(int argc, char *argv[])
     KConfigGroup flatpakGrp  = cfg->group(QStringLiteral("Flatpak"));
     bool flatpakEnabled = flatpakGrp.readEntry("Enabled", false);
 
+    KConfigGroup vendorPolicyGrp = cfg->group(QStringLiteral("VendorPolicy"));
+    QString vendorPolicyMode = vendorPolicyGrp.readEntry("Mode", QStringLiteral("priority"));
+
     const bool snapperAvailable = QFile::exists(QStringLiteral("/usr/bin/snapper"));
 
     setProp(root, "settingsAutoCheckEnabled", autoCheckEnabled);
     setProp(root, "settingsIntervalHours",    intervalHours);
     setProp(root, "settingsSnapperEnabled",   snapperEnabled);
     setProp(root, "settingsFlatpakEnabled",   flatpakEnabled);
+    setProp(root, "settingsVendorPolicy",     vendorPolicyMode);
     setProp(root, "snapperAvailable",         snapperAvailable);
     setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
 
@@ -317,10 +330,28 @@ int main(int argc, char *argv[])
                 st.text += QString("\n📸 Snapshots #%1 (pre) and #%2 (post) created")
                                .arg(st.snapshotPre).arg(st.snapshotPost);
 
-            setProp(root, "statusKind", st.kind);
-            setProp(root, "statusText", st.text);
-            setProp(root, "updatesAvailable", st.updatesAvailable);
-            setProp(root, "packageList", st.packageList);
+            if (applyInProgress && st.vendorChangeDetected && st.vendorChangeCount > 0)
+                st.text += QString("\n⚠️ %1 package(s) changed vendor during this update")
+                               .arg(st.vendorChangeCount);
+
+            // Convert vendorChanges QJsonArray to QVariantList so QML can iterate it
+            QVariantList vcList;
+            for (const QJsonValue &item : st.vendorChanges) {
+                const QJsonObject vco = item.toObject();
+                QVariantMap m;
+                m[QStringLiteral("package")]    = vco[QStringLiteral("package")].toString();
+                m[QStringLiteral("fromVendor")] = vco[QStringLiteral("fromVendor")].toString();
+                m[QStringLiteral("toVendor")]   = vco[QStringLiteral("toVendor")].toString();
+                vcList.append(m);
+            }
+
+            setProp(root, "statusKind",            st.kind);
+            setProp(root, "statusText",            st.text);
+            setProp(root, "updatesAvailable",      st.updatesAvailable);
+            setProp(root, "packageList",           st.packageList);
+            setProp(root, "vendorChangeDetected",  st.vendorChangeDetected);
+            setProp(root, "vendorChangeCount",     st.vendorChangeCount);
+            setProp(root, "vendorChanges",         vcList);
             setProp(root, "busy", false);
 
             // Fire reboot dialog only after a successful apply, once busy is clear.
@@ -427,12 +458,14 @@ int main(int argc, char *argv[])
             intervalMs       = intervalHours * 60 * 60 * 1000;
             snapperEnabled   = root->property("settingsSnapperEnabled").toBool();
             flatpakEnabled   = root->property("settingsFlatpakEnabled").toBool();
+            vendorPolicyMode = root->property("settingsVendorPolicy").toString();
 
             auto wcfg = KSharedConfig::openConfig();
             wcfg->group(QStringLiteral("AutoCheck")).writeEntry("Enabled",       autoCheckEnabled);
             wcfg->group(QStringLiteral("AutoCheck")).writeEntry("IntervalHours", intervalHours);
             wcfg->group(QStringLiteral("Snapper")).writeEntry("Enabled",         snapperEnabled);
             wcfg->group(QStringLiteral("Flatpak")).writeEntry("Enabled",         flatpakEnabled);
+            wcfg->group(QStringLiteral("VendorPolicy")).writeEntry("Mode",       vendorPolicyMode);
             wcfg->sync();
 
             if (autoCheckEnabled)

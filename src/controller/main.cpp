@@ -361,6 +361,103 @@ static bool read_flatpak_enabled()
     return read_kconfig_entry(kconf, "Flatpak", "Enabled", "false") == "true";
 }
 
+// ---- Vendor change policy ----
+
+struct VendorChange {
+    std::string package;
+    std::string fromVendor;
+    std::string toVendor;
+};
+
+static std::string read_vendor_policy()
+{
+    const std::string kconf = get_kconfig_path();
+    if (!kconf.empty()) {
+        const std::string val = read_kconfig_entry(kconf, "VendorPolicy", "Mode", "priority");
+        if (val == "opensuse" || val == "allow" || val == "deny" || val == "priority")
+            return val;
+    }
+    return "priority";
+}
+
+// Build the extra flags to append to `zypper dup` for the given policy.
+// NOTE: "opensuse" mode uses --from openSUSE, which assumes the repository alias
+// is literally "openSUSE" — the default on fresh Tumbleweed installs. Systems
+// that have renamed repositories will need this alias to be configurable; that
+// is deferred to a future version.
+static std::string dup_policy_flags(const std::string &policy)
+{
+    if (policy == "opensuse") return " --from openSUSE";
+    if (policy == "allow")    return " --allow-vendor-change";
+    if (policy == "deny")     return " --no-allow-vendor-change";
+    return "";  // "priority" = zypper default, no extra flags
+}
+
+// Parse the "The following packages are going to change vendor:" section from
+// zypper dup (--dry-run or real) output. Returns empty on any parse ambiguity
+// so we never produce a false positive.
+static std::vector<VendorChange> parse_vendor_changes(const std::string &output)
+{
+    std::vector<VendorChange> changes;
+    bool in_vendor_section = false;
+
+    size_t start = 0;
+    while (start < output.size()) {
+        size_t end = output.find('\n', start);
+        if (end == std::string::npos) end = output.size();
+
+        const std::string line    = output.substr(start, end - start);
+        const std::string trimmed = trim_copy(line);
+        start = end + 1;
+
+        if (trimmed.empty()) {
+            in_vendor_section = false;
+            continue;
+        }
+
+        if (contains_any(trimmed, {"change vendor", "vendor will change", "different vendor"})) {
+            in_vendor_section = true;
+            continue;
+        }
+
+        if (!in_vendor_section) continue;
+
+        // Expected format: "  packagename  oldvendor -> newvendor"
+        const size_t arrow = trimmed.find(" -> ");
+        if (arrow == std::string::npos) continue;
+
+        const std::string before   = trimmed.substr(0, arrow);
+        const std::string toVendor = trim_copy(trimmed.substr(arrow + 4));
+
+        // Package name ends at the first run of two-or-more spaces
+        const size_t sep = before.find("  ");
+        if (sep == std::string::npos) continue;
+
+        VendorChange vc;
+        vc.package    = trim_copy(before.substr(0, sep));
+        vc.fromVendor = trim_copy(before.substr(sep));
+        vc.toVendor   = toVendor;
+
+        if (!vc.package.empty() && !vc.fromVendor.empty() && !vc.toVendor.empty())
+            changes.push_back(vc);
+    }
+
+    return changes;
+}
+
+static std::string vendor_changes_json(const std::vector<VendorChange> &changes)
+{
+    std::string s = "[";
+    for (size_t i = 0; i < changes.size(); ++i) {
+        if (i > 0) s += ",";
+        s += "{\"package\":\""    + json_escape(changes[i].package)    + "\","
+              "\"fromVendor\":\"" + json_escape(changes[i].fromVendor) + "\","
+              "\"toVendor\":\""   + json_escape(changes[i].toVendor)   + "\"}";
+    }
+    s += "]";
+    return s;
+}
+
 static int create_pre_snapshot()
 {
     if (!std::filesystem::exists("/usr/bin/snapper"))
@@ -470,17 +567,18 @@ static void append_history(const std::string &timestamp,
 
 static int cmd_status()
 {
-    const std::string timestamp = iso8601_now_utc();
-    const std::string zypperCmd = "zypper -n lu 2>&1";
+    const std::string timestamp    = iso8601_now_utc();
+    const std::string vendorPolicy = read_vendor_policy();
+    const std::string zypperCmd    = "zypper -n lu 2>&1";
 
     std::string output;
     const int rc = run_command_capture(zypperCmd, output);
 
     bool updatesAvailable = false;
-    bool ok = true;
+    bool ok        = true;
     bool needsAuth = false;
     bool rebootRequired = false;
-    int updateCount = 0;
+    int  updateCount = 0;
     std::string summary;
     std::string details;
     std::string packagePreview;
@@ -523,17 +621,15 @@ static int cmd_status()
                 end = output.size();
 
             std::string line = trim_copy(output.substr(start, end - start));
-            if (line.rfind("v", 0) == 0) {
+            if (line.rfind("v", 0) == 0)
                 updateCount++;
-            }
 
             start = end + 1;
         }
 
         packagePreview = build_package_preview(output, 5);
-        packageList = build_package_list(output);
+        packageList    = build_package_list(output);
         rebootRequired = compute_reboot_required(packageList);
-
         updatesAvailable = (updateCount > 0);
         summary = "Updates available";
 
@@ -548,18 +644,38 @@ static int cmd_status()
         }
     }
 
+    // Vendor change detection: run zypper dup --dry-run with the configured policy
+    // flags so the preview matches exactly what apply will do.
+    // Only executed when updates are available; skipped on auth/error to avoid
+    // false positives.
+    std::vector<VendorChange> vendorChanges;
+    bool vendorChangeDetected = false;
+
+    if (ok && updatesAvailable) {
+        std::string dupOut;
+        const std::string dupCmd =
+            "zypper -n dup --dry-run" + dup_policy_flags(vendorPolicy) + " 2>&1";
+        run_command_capture(dupCmd, dupOut);
+        vendorChanges = parse_vendor_changes(dupOut);
+        vendorChangeDetected = !vendorChanges.empty();
+    }
+
     std::cout
         << "{"
-        << "\"ok\":" << (ok ? "true" : "false") << ","
-        << "\"summary\":\"" << json_escape(summary) << "\","
-        << "\"details\":\"" << json_escape(details) << "\","
-        << "\"packagePreview\":\"" << json_escape(packagePreview) << "\","
-        << "\"packageList\":\"" << json_escape(packageList) << "\","
-        << "\"updateCount\":" << updateCount << ","
-        << "\"updatesAvailable\":" << (updatesAvailable ? "true" : "false") << ","
-        << "\"rebootRequired\":" << (rebootRequired ? "true" : "false") << ","
-        << "\"needsAuth\":" << (needsAuth ? "true" : "false") << ","
-        << "\"timestamp\":\"" << json_escape(timestamp) << "\""
+        << "\"ok\":"                   << (ok ? "true" : "false") << ","
+        << "\"summary\":\""            << json_escape(summary) << "\","
+        << "\"details\":\""            << json_escape(details) << "\","
+        << "\"packagePreview\":\""     << json_escape(packagePreview) << "\","
+        << "\"packageList\":\""        << json_escape(packageList) << "\","
+        << "\"updateCount\":"          << updateCount << ","
+        << "\"updatesAvailable\":"     << (updatesAvailable ? "true" : "false") << ","
+        << "\"rebootRequired\":"       << (rebootRequired ? "true" : "false") << ","
+        << "\"needsAuth\":"            << (needsAuth ? "true" : "false") << ","
+        << "\"vendorPolicy\":\""       << json_escape(vendorPolicy) << "\","
+        << "\"vendorChangeDetected\":" << (vendorChangeDetected ? "true" : "false") << ","
+        << "\"vendorChangeCount\":"    << static_cast<int>(vendorChanges.size()) << ","
+        << "\"vendorChanges\":"        << vendor_changes_json(vendorChanges) << ","
+        << "\"timestamp\":\""          << json_escape(timestamp) << "\""
         << "}\n";
 
     append_history(timestamp, "status", ok, updateCount, rebootRequired,
@@ -569,8 +685,9 @@ static int cmd_status()
 
 static int cmd_apply()
 {
-    const std::string timestamp = iso8601_now_utc();
-    const bool snapperEnabled = read_snapper_enabled();
+    const std::string timestamp    = iso8601_now_utc();
+    const std::string vendorPolicy = read_vendor_policy();
+    const bool snapperEnabled      = read_snapper_enabled();
 
     int snapshotPre  = -1;
     int snapshotPost = -1;
@@ -582,7 +699,8 @@ static int cmd_apply()
             fprintf(stderr, "[snapper] pre-snapshot failed or snapper unavailable — continuing without snapshot\n");
     }
 
-    const std::string zypperCmd = "zypper -n dup 2>&1";
+    const std::string zypperCmd =
+        "zypper -n dup" + dup_policy_flags(vendorPolicy) + " 2>&1";
 
     std::string output;
     bool ok = false;
@@ -605,10 +723,14 @@ static int cmd_apply()
             << "\"updatesAvailable\":false,"
             << "\"rebootRequired\":false,"
             << "\"needsAuth\":false,"
-            << "\"snapshotPre\":" << snapshotPre << ","
-            << "\"snapshotPost\":" << snapshotPost << ","
-            << "\"snapperUsed\":" << (snapperUsed ? "true" : "false") << ","
-            << "\"timestamp\":\"" << json_escape(timestamp) << "\""
+            << "\"snapshotPre\":"          << snapshotPre << ","
+            << "\"snapshotPost\":"         << snapshotPost << ","
+            << "\"snapperUsed\":"          << (snapperUsed ? "true" : "false") << ","
+            << "\"vendorPolicy\":\""       << json_escape(vendorPolicy) << "\","
+            << "\"vendorChangeDetected\":false,"
+            << "\"vendorChangeCount\":0,"
+            << "\"vendorChanges\":[],"
+            << "\"timestamp\":\""          << json_escape(timestamp) << "\""
             << "}\n";
         std::cout.flush();
         append_history(timestamp, "apply", false, 0, false,
@@ -646,6 +768,11 @@ static int cmd_apply()
 
     const bool rebootRequired = ok && compute_apply_reboot_required(output);
 
+    // Parse any vendor changes that actually occurred during this update
+    const std::vector<VendorChange> vendorChanges = parse_vendor_changes(output);
+    const bool vendorChangeDetected = !vendorChanges.empty();
+    const int  vendorChangeCount    = static_cast<int>(vendorChanges.size());
+
     // ---- Optional Flatpak update ----
     bool flatpakUpdated = false;
     if (ok && read_flatpak_enabled() && std::filesystem::exists("/usr/bin/flatpak")) {
@@ -665,9 +792,11 @@ static int cmd_apply()
         }
     }
 
-    const std::string summary = ok          ? "Update complete"
-                               : needsAuth  ? "Permission denied"
-                                            : "Update failed";
+    std::string summary = ok         ? "Update complete"
+                        : needsAuth  ? "Permission denied"
+                                     : "Update failed";
+    if (ok && vendorChangeDetected)
+        summary += " (" + std::to_string(vendorChangeCount) + " vendor change(s))";
 
     // Ensure the JSON result starts on its own line
     if (!output.empty() && output.back() != '\n')
@@ -675,20 +804,24 @@ static int cmd_apply()
 
     std::cout
         << "{"
-        << "\"ok\":" << (ok ? "true" : "false") << ","
-        << "\"summary\":\"" << json_escape(summary) << "\","
+        << "\"ok\":"                   << (ok ? "true" : "false") << ","
+        << "\"summary\":\""            << json_escape(summary) << "\","
         << "\"details\":\"\","
         << "\"packagePreview\":\"\","
         << "\"packageList\":\"\","
         << "\"updateCount\":0,"
         << "\"updatesAvailable\":false,"
-        << "\"rebootRequired\":" << (rebootRequired ? "true" : "false") << ","
-        << "\"needsAuth\":" << (needsAuth ? "true" : "false") << ","
-        << "\"snapshotPre\":" << snapshotPre << ","
-        << "\"snapshotPost\":" << snapshotPost << ","
-        << "\"snapperUsed\":" << (snapperUsed ? "true" : "false") << ","
-        << "\"flatpakUpdated\":" << (flatpakUpdated ? "true" : "false") << ","
-        << "\"timestamp\":\"" << json_escape(timestamp) << "\""
+        << "\"rebootRequired\":"       << (rebootRequired ? "true" : "false") << ","
+        << "\"needsAuth\":"            << (needsAuth ? "true" : "false") << ","
+        << "\"snapshotPre\":"          << snapshotPre << ","
+        << "\"snapshotPost\":"         << snapshotPost << ","
+        << "\"snapperUsed\":"          << (snapperUsed ? "true" : "false") << ","
+        << "\"flatpakUpdated\":"       << (flatpakUpdated ? "true" : "false") << ","
+        << "\"vendorPolicy\":\""       << json_escape(vendorPolicy) << "\","
+        << "\"vendorChangeDetected\":" << (vendorChangeDetected ? "true" : "false") << ","
+        << "\"vendorChangeCount\":"    << vendorChangeCount << ","
+        << "\"vendorChanges\":"        << vendor_changes_json(vendorChanges) << ","
+        << "\"timestamp\":\""          << json_escape(timestamp) << "\""
         << "}\n";
     std::cout.flush();
 

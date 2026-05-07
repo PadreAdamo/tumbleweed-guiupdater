@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls as Controls
+import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import QtCore
 
@@ -40,7 +41,13 @@ Kirigami.ApplicationWindow {
     property int    settingsIntervalHours:    4
     property bool   settingsSnapperEnabled:   true
     property bool   settingsFlatpakEnabled:   false
+    property string settingsVendorPolicy:     "priority"
     property bool   saveSettingsRequested:    false
+
+    // ---- Vendor change state (populated by status/apply JSON result) ----
+    property bool vendorChangeDetected: false
+    property int  vendorChangeCount:    0
+    property var  vendorChanges:        []
 
     // ---- Read-only state set by C++ ----
     property bool   snapperAvailable: false
@@ -116,6 +123,13 @@ Kirigami.ApplicationWindow {
         return { label: icon + "  " + primary, subtitle: sub }
     }
 
+    function policyLabel(mode) {
+        if (mode === "opensuse") return "Always use openSUSE repositories"
+        if (mode === "allow")   return "Always allow vendor changes"
+        if (mode === "deny")    return "Never allow vendor changes"
+        return "Follow repository priority"
+    }
+
     // ---- Settings page ----
     Component {
         id: settingsPageComponent
@@ -189,6 +203,63 @@ Kirigami.ApplicationWindow {
                         root.settingsFlatpakEnabled = checked
                         root.saveSettingsRequested = true
                     }
+                }
+
+                // ════════ Vendor Policy ════════
+                Kirigami.Separator {
+                    Kirigami.FormData.isSection: true
+                    Kirigami.FormData.label: "Vendor Policy"
+                }
+
+                Controls.ButtonGroup { id: vendorPolicyGroup }
+
+                Controls.RadioButton {
+                    Kirigami.FormData.label: "Vendor policy"
+                    text: "Always use openSUSE repositories"
+                    Controls.ButtonGroup.group: vendorPolicyGroup
+                    checked: root.settingsVendorPolicy === "opensuse"
+                    onToggled: if (checked) {
+                        root.settingsVendorPolicy = "opensuse"
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.RadioButton {
+                    text: "Follow repository priority  (default)"
+                    Controls.ButtonGroup.group: vendorPolicyGroup
+                    checked: root.settingsVendorPolicy === "priority"
+                    onToggled: if (checked) {
+                        root.settingsVendorPolicy = "priority"
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.RadioButton {
+                    text: "Always allow vendor changes"
+                    Controls.ButtonGroup.group: vendorPolicyGroup
+                    checked: root.settingsVendorPolicy === "allow"
+                    onToggled: if (checked) {
+                        root.settingsVendorPolicy = "allow"
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.RadioButton {
+                    text: "Never allow vendor changes"
+                    Controls.ButtonGroup.group: vendorPolicyGroup
+                    checked: root.settingsVendorPolicy === "deny"
+                    onToggled: if (checked) {
+                        root.settingsVendorPolicy = "deny"
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: "Controls how zypper handles packages that would switch\nbetween vendors or repositories during an update."
+                    font.italic: true
+                    opacity: 0.65
+                    wrapMode: Text.Wrap
                 }
 
                 // ════════ About ════════
@@ -328,10 +399,14 @@ Kirigami.ApplicationWindow {
                         text: root.busy ? "Applying…" : "Apply Updates (Admin)"
                         enabled: !root.busy && root.updatesAvailable
                         onClicked: {
-                            root.busy = true
-                            root.statusText = "Applying updates (admin)…"
-                            root.statusKind = "warn"
-                            root.runApplyRequested = true
+                            if (root.vendorChangeDetected && root.vendorChanges.length > 0) {
+                                vendorChangeDialog.open()
+                            } else {
+                                root.busy = true
+                                root.statusText = "Applying updates (admin)…"
+                                root.statusKind = "warn"
+                                root.runApplyRequested = true
+                            }
                         }
                     }
 
@@ -480,6 +555,79 @@ Kirigami.ApplicationWindow {
             Controls.Button {
                 text: "Later"
                 onClicked: rebootDialog.close()
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: vendorChangeDialog
+        title: "Vendor Changes Detected"
+        modal: true
+        width: Math.min(root.width * 0.9, 580)
+        height: Math.min(root.height * 0.85, 500)
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: "The following packages would switch vendors during this update:"
+            }
+
+            Controls.ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(root.vendorChangeCount * 28 + 16, 200)
+                clip: true
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 2
+
+                    Repeater {
+                        model: root.vendorChanges
+                        Controls.Label {
+                            Layout.fillWidth: true
+                            text: "• " + modelData.package + ": "
+                                  + modelData.fromVendor + " → " + modelData.toVendor
+                            wrapMode: Text.Wrap
+                            font.family: "monospace"
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: "This is normal if you have third-party repositories configured,\n"
+                    + "but review this list before proceeding."
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.italic: true
+                opacity: 0.75
+                text: "Current policy: " + root.policyLabel(root.settingsVendorPolicy)
+            }
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Cancel"
+                onClicked: vendorChangeDialog.close()
+            }
+            Controls.Button {
+                text: "Proceed with Update"
+                onClicked: {
+                    vendorChangeDialog.close()
+                    root.busy = true
+                    root.statusText = "Applying updates (admin)…"
+                    root.statusKind = "warn"
+                    root.runApplyRequested = true
+                }
             }
         }
     }
