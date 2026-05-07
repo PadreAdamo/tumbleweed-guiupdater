@@ -7,6 +7,8 @@
 #include <array>
 #include <vector>
 #include <filesystem>
+#include <pwd.h>
+#include <unistd.h>
 
 static std::string iso8601_now_utc()
 {
@@ -328,6 +330,77 @@ static int create_post_snapshot(int pre_num)
     return (end != trimmed.c_str() && n > 0) ? static_cast<int>(n) : -1;
 }
 
+// ---- History log ----
+
+// When running as root via pkexec, PKEXEC_UID holds the invoking user's UID.
+// Use it to write history to the correct user's XDG data directory instead of
+// /root/.local/share/, then chown the file and dir so the user can append later.
+static std::string get_history_log_path()
+{
+    const char *pkexec_uid = std::getenv("PKEXEC_UID");
+    if (pkexec_uid) {
+        char *end = nullptr;
+        const unsigned long uid = std::strtoul(pkexec_uid, &end, 10);
+        if (end != pkexec_uid) {
+            const struct passwd *pw = getpwuid(static_cast<uid_t>(uid));
+            if (pw && pw->pw_dir)
+                return std::string(pw->pw_dir)
+                       + "/.local/share/TumbleweedUpdater/history.log";
+        }
+    }
+    const char *home = std::getenv("HOME");
+    return home ? std::string(home) + "/.local/share/TumbleweedUpdater/history.log"
+                : std::string{};
+}
+
+static void chown_to_invoking_user(const std::string &path)
+{
+    const char *s = std::getenv("PKEXEC_UID");
+    if (!s) return;
+    char *end = nullptr;
+    const unsigned long uid = std::strtoul(s, &end, 10);
+    if (end == s) return;
+    const struct passwd *pw = getpwuid(static_cast<uid_t>(uid));
+    if (pw) ::chown(path.c_str(), pw->pw_uid, pw->pw_gid);
+}
+
+static void append_history(const std::string &timestamp,
+                            const std::string &operation,
+                            bool ok,
+                            int updateCount,
+                            bool rebootRequired,
+                            bool snapperUsed,
+                            int snapshotPre,
+                            int snapshotPost,
+                            const std::string &details)
+{
+    const std::string path = get_history_log_path();
+    if (path.empty()) return;
+
+    const std::string dir = path.substr(0, path.rfind('/'));
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    chown_to_invoking_user(dir);
+
+    FILE *f = fopen(path.c_str(), "a");
+    if (!f) return;
+
+    std::fprintf(f,
+        "{\"timestamp\":\"%s\",\"operation\":\"%s\","
+        "\"ok\":%s,\"updateCount\":%d,\"rebootRequired\":%s,"
+        "\"snapperUsed\":%s,\"snapshotPre\":%d,\"snapshotPost\":%d,"
+        "\"details\":\"%s\"}\n",
+        json_escape(timestamp).c_str(), operation.c_str(),
+        ok ? "true" : "false", updateCount,
+        rebootRequired ? "true" : "false",
+        snapperUsed ? "true" : "false",
+        snapshotPre, snapshotPost,
+        json_escape(details).c_str());
+
+    fclose(f);
+    chown_to_invoking_user(path);
+}
+
 static int cmd_status()
 {
     const std::string timestamp = iso8601_now_utc();
@@ -422,6 +495,8 @@ static int cmd_status()
         << "\"timestamp\":\"" << json_escape(timestamp) << "\""
         << "}\n";
 
+    append_history(timestamp, "status", ok, updateCount, rebootRequired,
+                   false, -1, -1, summary);
     return ok ? 0 : 1;
 }
 
@@ -469,6 +544,8 @@ static int cmd_apply()
             << "\"timestamp\":\"" << json_escape(timestamp) << "\""
             << "}\n";
         std::cout.flush();
+        append_history(timestamp, "apply", false, 0, false,
+                       snapperUsed, snapshotPre, snapshotPost, "Failed to start zypper");
         return 1;
     }
 
@@ -528,6 +605,8 @@ static int cmd_apply()
         << "}\n";
     std::cout.flush();
 
+    append_history(timestamp, "apply", ok, 0, rebootRequired,
+                   snapperUsed, snapshotPre, snapshotPost, summary);
     return ok ? 0 : 1;
 }
 

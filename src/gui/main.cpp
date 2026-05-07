@@ -19,6 +19,9 @@
 #include <KSharedConfig>
 #include <KConfigGroup>
 
+#include <QFile>
+#include <QStandardPaths>
+
 #include <cstdio>
 
 static bool isOnBattery()
@@ -55,6 +58,7 @@ struct UiStatus {
     bool snapperUsed = false;
     int snapshotPre  = -1;
     int snapshotPost = -1;
+    int updateCount  = 0;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -90,6 +94,7 @@ static UiStatus parseStatusJson(const QString &out)
     s.snapperUsed = o["snapperUsed"].toBool();
     s.snapshotPre  = o["snapshotPre"].toInt(-1);
     s.snapshotPost = o["snapshotPost"].toInt(-1);
+    s.updateCount  = o["updateCount"].toInt();
 
     if (!ok) {
         if (needsAuth) {
@@ -392,6 +397,36 @@ int main(int argc, char *argv[])
         if (root->property("runRebootRequested").toBool()) {
             root->setProperty("runRebootRequested", false);
             QProcess::startDetached("pkexec", {"systemctl", "reboot"});
+        }
+
+        if (root->property("loadHistoryRequested").toBool()) {
+            root->setProperty("loadHistoryRequested", false);
+            const QString path =
+                QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+                + "/history.log";
+            QFile file(path);
+            QString content;
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                const QByteArray all = file.readAll();
+                const QList<QByteArray> rawLines = all.split('\n');
+                QStringList kept;
+                for (int i = rawLines.size() - 1; i >= 0 && kept.size() < 100; --i) {
+                    const QByteArray line = rawLines[i].trimmed();
+                    if (!line.isEmpty())
+                        kept.prepend(QString::fromUtf8(line));
+                }
+                content = kept.join('\n');
+            }
+            root->setProperty("historyLog", content);
+        }
+
+        if (root->property("clearHistoryRequested").toBool()) {
+            root->setProperty("clearHistoryRequested", false);
+            const QString path =
+                QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+                + "/history.log";
+            QFile::remove(path);
+            root->setProperty("historyLog", QString());
         }
     });
 

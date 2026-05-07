@@ -10,8 +10,6 @@ Kirigami.ApplicationWindow {
     visible: true
     title: "Tumbleweed Updater"
 
-    // Closing the window hides it (minimizes to tray) instead of quitting.
-    // The real Quit action lives in the tray context menu.
     onClosing: function(close) {
         close.accepted = false
         root.hide()
@@ -29,7 +27,10 @@ Kirigami.ApplicationWindow {
     property string packageList: ""
     property string applyLog: ""
 
-    // One-shot trigger: C++ sets this true; we open the dialog and reset it.
+    property string historyLog: ""
+    property bool loadHistoryRequested: false
+    property bool clearHistoryRequested: false
+
     property bool showRebootDialog: false
     onShowRebootDialogChanged: {
         if (showRebootDialog) {
@@ -54,107 +55,231 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    pageStack.initialPage: Kirigami.Page {
-        title: "Tumbleweed Updater"
+    function formatHistoryEntry(entry) {
+        var icon = "🔍"
+        var primary = ""
 
-        // Controls panel — centered vertically when no log, top-aligned when log is visible
-        Column {
-            id: controlsCol
-            width: parent.width * 0.85
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: root.applyLog.length > 0
-                ? Kirigami.Units.largeSpacing
-                : Math.max(Kirigami.Units.largeSpacing,
-                           (parent.height - implicitHeight) / 2)
-            spacing: Kirigami.Units.largeSpacing
-
-            Kirigami.Heading {
-                text: "Tumbleweed Updater"
-                level: 1
-                horizontalAlignment: Text.AlignHCenter
-                width: parent.width
+        if (entry.operation === "apply") {
+            if (entry.ok) {
+                icon = "✅"
+                primary = "Applied updates"
+            } else {
+                icon = "❌"
+                primary = "Apply failed"
             }
-
-            Controls.Label {
-                text: root.statusText
-                wrapMode: Text.Wrap
-                horizontalAlignment: Text.AlignHCenter
-                width: parent.width
-
-                color: root.statusKind === "ok"   ? Kirigami.Theme.positiveTextColor
-                     : root.statusKind === "warn" ? Kirigami.Theme.neutralTextColor
-                     : root.statusKind === "lock" ? Kirigami.Theme.neutralTextColor
-                     : Kirigami.Theme.negativeTextColor
-            }
-
-            Controls.BusyIndicator {
-                running: root.busy
-                visible: root.busy
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
-            Controls.CheckBox {
-                text: "Check for updates on launch"
-                checked: appSettings.autoCheckOnLaunch
-                onToggled: appSettings.autoCheckOnLaunch = checked
-            }
-
-            Controls.Button {
-                text: root.busy && !root.runApplyRequested ? "Checking…" : "Check Status"
-                enabled: !root.busy
-                onClicked: {
-                    root.busy = true
-                    root.statusText = "Checking for updates…"
-                    root.statusKind = "ok"
-                    root.runStatusRequested = true
-                }
-            }
-
-            Controls.Button {
-                text: root.busy ? "Applying…" : "Apply Updates (Admin)"
-                enabled: !root.busy && root.updatesAvailable
-                onClicked: {
-                    root.busy = true
-                    root.statusText = "Applying updates (admin)…"
-                    root.statusKind = "warn"
-                    root.runApplyRequested = true
-                }
-            }
-
-            Controls.Button {
-                text: root.packageList.length > 0
-                      ? "View " + root.packageList.split("\n").length + " Packages"
-                      : "View Packages"
-                enabled: root.packageList.length > 0
-                onClicked: packageDialog.open()
+        } else {
+            if (!entry.ok) {
+                icon = "❌"
+                primary = "Check failed"
+            } else if (entry.updateCount > 0) {
+                var n = entry.updateCount
+                primary = "Checked — " + n + " update" + (n !== 1 ? "s" : "") + " available"
+            } else {
+                primary = "Checked — up to date"
             }
         }
 
-        // Live apply log — visible during and after apply, fills remaining space
-        Controls.ScrollView {
-            id: logView
-            visible: root.applyLog.length > 0
+        var dt = new Date(entry.timestamp)
+        var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        var h = dt.getHours()
+        var ampm = h >= 12 ? "PM" : "AM"
+        h = h % 12 || 12
+        var m = String(dt.getMinutes()).padStart(2, "0")
+        var ts = months[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear()
+                 + " at " + h + ":" + m + " " + ampm
+
+        var sub = ts
+        if (entry.snapperUsed)
+            sub += "  ·  Snapshots #" + entry.snapshotPre + " / #" + entry.snapshotPost
+        if (entry.rebootRequired)
+            sub += "  ·  Reboot required"
+
+        return { label: icon + "  " + primary, subtitle: sub }
+    }
+
+    pageStack.initialPage: Kirigami.Page {
+        title: tabBar.currentIndex === 0 ? "Tumbleweed Updater" : "History"
+        padding: 0
+
+        header: Controls.TabBar {
+            id: tabBar
+            onCurrentIndexChanged: {
+                mainView.currentIndex = currentIndex
+                if (currentIndex === 1)
+                    root.loadHistoryRequested = true
+            }
+            Controls.TabButton { text: "Updater" }
+            Controls.TabButton { text: "History" }
+        }
+
+        Controls.SwipeView {
+            id: mainView
+            anchors.fill: parent
+            interactive: false
             clip: true
-            anchors {
-                top: controlsCol.bottom
-                topMargin: Kirigami.Units.largeSpacing
-                left: parent.left
-                leftMargin: Kirigami.Units.largeSpacing
-                right: parent.right
-                rightMargin: Kirigami.Units.largeSpacing
-                bottom: parent.bottom
-                bottomMargin: Kirigami.Units.largeSpacing
+
+            // ---- Tab 0: Updater ----
+            Item {
+                Column {
+                    id: controlsCol
+                    width: parent.width * 0.85
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: root.applyLog.length > 0
+                        ? Kirigami.Units.largeSpacing
+                        : Math.max(Kirigami.Units.largeSpacing,
+                                   (parent.height - implicitHeight) / 2)
+                    spacing: Kirigami.Units.largeSpacing
+
+                    Kirigami.Heading {
+                        text: "Tumbleweed Updater"
+                        level: 1
+                        horizontalAlignment: Text.AlignHCenter
+                        width: parent.width
+                    }
+
+                    Controls.Label {
+                        text: root.statusText
+                        wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                        width: parent.width
+                        color: root.statusKind === "ok"   ? Kirigami.Theme.positiveTextColor
+                             : root.statusKind === "warn" ? Kirigami.Theme.neutralTextColor
+                             : root.statusKind === "lock" ? Kirigami.Theme.neutralTextColor
+                             : Kirigami.Theme.negativeTextColor
+                    }
+
+                    Controls.BusyIndicator {
+                        running: root.busy
+                        visible: root.busy
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
+
+                    Controls.CheckBox {
+                        text: "Check for updates on launch"
+                        checked: appSettings.autoCheckOnLaunch
+                        onToggled: appSettings.autoCheckOnLaunch = checked
+                    }
+
+                    Controls.Button {
+                        text: root.busy && !root.runApplyRequested ? "Checking…" : "Check Status"
+                        enabled: !root.busy
+                        onClicked: {
+                            root.busy = true
+                            root.statusText = "Checking for updates…"
+                            root.statusKind = "ok"
+                            root.runStatusRequested = true
+                        }
+                    }
+
+                    Controls.Button {
+                        text: root.busy ? "Applying…" : "Apply Updates (Admin)"
+                        enabled: !root.busy && root.updatesAvailable
+                        onClicked: {
+                            root.busy = true
+                            root.statusText = "Applying updates (admin)…"
+                            root.statusKind = "warn"
+                            root.runApplyRequested = true
+                        }
+                    }
+
+                    Controls.Button {
+                        text: root.packageList.length > 0
+                              ? "View " + root.packageList.split("\n").length + " Packages"
+                              : "View Packages"
+                        enabled: root.packageList.length > 0
+                        onClicked: packageDialog.open()
+                    }
+                }
+
+                Controls.ScrollView {
+                    id: logView
+                    visible: root.applyLog.length > 0
+                    clip: true
+                    anchors {
+                        top: controlsCol.bottom
+                        topMargin: Kirigami.Units.largeSpacing
+                        left: parent.left
+                        leftMargin: Kirigami.Units.largeSpacing
+                        right: parent.right
+                        rightMargin: Kirigami.Units.largeSpacing
+                        bottom: parent.bottom
+                        bottomMargin: Kirigami.Units.largeSpacing
+                    }
+
+                    Controls.TextArea {
+                        readOnly: true
+                        text: root.applyLog
+                        wrapMode: TextEdit.WrapAnywhere
+                        font.family: "monospace"
+                        font.pixelSize: 11
+                        onTextChanged: cursorPosition = length
+                    }
+                }
             }
 
-            Controls.TextArea {
-                id: logArea
-                readOnly: true
-                text: root.applyLog
-                wrapMode: TextEdit.WrapAnywhere
-                font.family: "monospace"
-                font.pixelSize: 11
-                onTextChanged: cursorPosition = length
+            // ---- Tab 1: History ----
+            Item {
+                id: historyTab
+
+                property var entries: {
+                    if (!root.historyLog) return []
+                    var lines = root.historyLog.split('\n')
+                    var result = []
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i].trim()
+                        if (!line) continue
+                        try { result.push(JSON.parse(line)) } catch(e) {}
+                    }
+                    return result
+                }
+
+                // Clear button — top-right, only when entries exist
+                Row {
+                    id: historyToolRow
+                    visible: historyTab.entries.length > 0
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: Kirigami.Units.smallSpacing
+                    height: visible ? implicitHeight : 0
+                    z: 1
+
+                    Controls.Button {
+                        flat: true
+                        text: "Clear History"
+                        icon.name: "edit-clear-history"
+                        onClicked: clearConfirmDialog.open()
+                    }
+                }
+
+                Kirigami.PlaceholderMessage {
+                    anchors.centerIn: parent
+                    visible: historyTab.entries.length === 0
+                    text: "No update history yet"
+                    explanation: "Check for updates or apply an update to begin building history"
+                    icon.name: "view-history"
+                }
+
+                ListView {
+                    anchors {
+                        top: historyToolRow.visible ? historyToolRow.bottom : parent.top
+                        left: parent.left
+                        right: parent.right
+                        bottom: parent.bottom
+                    }
+                    visible: historyTab.entries.length > 0
+                    model: historyTab.entries
+                    clip: true
+
+                    delegate: Kirigami.BasicListItem {
+                        required property var modelData
+                        required property int index
+
+                        readonly property var _fmt: root.formatHistoryEntry(modelData)
+                        label: _fmt.label
+                        subtitle: _fmt.subtitle
+                    }
+                }
             }
         }
     }
@@ -171,7 +296,6 @@ Kirigami.ApplicationWindow {
             clip: true
 
             Controls.TextArea {
-                id: packageText
                 text: root.packageList
                 readOnly: true
                 wrapMode: TextEdit.NoWrap
@@ -204,6 +328,33 @@ Kirigami.ApplicationWindow {
             Controls.Button {
                 text: "Later"
                 onClicked: rebootDialog.close()
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: clearConfirmDialog
+        title: "Clear History"
+        modal: true
+        width: Math.min(root.width * 0.7, 400)
+
+        contentItem: Controls.Label {
+            padding: Kirigami.Units.largeSpacing
+            wrapMode: Text.Wrap
+            text: "Delete the entire update history log?\n\nThis cannot be undone."
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Delete"
+                onClicked: {
+                    root.clearHistoryRequested = true
+                    clearConfirmDialog.close()
+                }
+            }
+            Controls.Button {
+                text: "Cancel"
+                onClicked: clearConfirmDialog.close()
             }
         }
     }
