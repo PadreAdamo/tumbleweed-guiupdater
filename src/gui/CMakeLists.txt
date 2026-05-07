@@ -21,6 +21,15 @@ find_path(KF6_CONFIG_INCLUDE NAMES kconfig_version.h
 
 find_program(Qt6_RCC NAMES rcc HINTS /usr/libexec/qt6 /usr/lib64/qt6/bin /usr/lib/qt6/bin REQUIRED)
 
+find_program(DESKTOP_FILE_VALIDATE NAMES desktop-file-validate)
+if(DESKTOP_FILE_VALIDATE)
+    add_custom_target(validate-desktop ALL
+        COMMAND ${DESKTOP_FILE_VALIDATE} ${CMAKE_CURRENT_SOURCE_DIR}/tumbleweed-updater.desktop
+        COMMENT "Validating tumbleweed-updater.desktop"
+        VERBATIM
+    )
+endif()
+
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/qml_resources.cpp
     COMMAND ${Qt6_RCC}
@@ -65,3 +74,6 @@ install(TARGETS tumbleweed-updater
 
 install(FILES TumbleweedUpdater.notifyrc
         DESTINATION ${KDE_INSTALL_DATADIR}/knotifications6)
+
+install(FILES tumbleweed-updater.desktop
+        DESTINATION ${KDE_INSTALL_APPDIR})
