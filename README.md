@@ -19,7 +19,8 @@ Tumbleweed GUI Updater keeps your rolling-release system current without requiri
 - **Snapper pre/post snapshots** bracketing every `zypper dup` run — snapshot numbers are shown in the status view so you always know your rollback point
 - **Optional Flatpak updates** run after `zypper dup` with output streamed to the same live log
 - **Persistent update history** — every check and apply is appended to a JSONL log at `~/.local/share/TumbleweedUpdater/history.log`, browsable in the History tab
-- **KDE-native settings page** built with Kirigami FormLayout — auto-check interval, Snapper toggle, Flatpak toggle, all persisted via KConfig
+- **Vendor change policy** — four modes control how `zypper dup` handles packages that would switch repositories or vendors; a pre-apply warning dialog lists affected packages so you always know what is changing before it happens
+- **KDE-native settings page** built with Kirigami FormLayout — auto-check interval, Snapper toggle, Flatpak toggle, vendor policy, all persisted via KConfig
 - **Privilege separation** — the GUI never runs as root; `zypper dup` and `systemctl reboot` are invoked via `pkexec`
 
 ---
@@ -115,9 +116,23 @@ Enabled=true
 
 [Flatpak]
 Enabled=false
+
+[VendorPolicy]
+Mode=priority
 ```
 
 The controller reads this file directly (it has no Qt dependency), so there is no separate config file to keep in sync.
+
+### Vendor policy modes
+
+| Mode | zypper flag | When to use |
+|---|---|---|
+| `priority` | *(none — zypper default)* | Standard Tumbleweed systems. Respects repository priorities as configured. |
+| `opensuse` | `--from openSUSE` | Forces packages to come from the official openSUSE repository only. |
+| `allow` | `--allow-vendor-change` | Systems with third-party repositories such as Packman where vendor switches are expected. |
+| `deny` | `--no-allow-vendor-change` | Refuses any update that would switch a package's vendor; some packages may be left unupdated. |
+
+Regardless of policy, if a status check detects that any packages would change vendor, the app shows a warning dialog listing the affected packages before the update proceeds. The dialog is informational — it never blocks the update, it only ensures you see what is changing.
 
 ---
 
@@ -127,7 +142,7 @@ The project is intentionally split into two binaries to enforce privilege separa
 
 **`tumbleweed-updater`** is the Qt6/Kirigami GUI. It runs as your normal user account for its entire lifetime. It communicates with the controller by launching it as a child process and reading its stdout. It never calls zypper directly and never elevates its own privileges.
 
-**`twu-ctl`** is a standalone C++20 controller with no Qt dependency. For read-only operations (`status`) it runs as the current user. For mutating operations (`apply`) the GUI launches it under `pkexec`, which prompts for authentication via Polkit before granting root. The controller streams zypper output line-by-line to stdout, then emits a single JSON object as the final line with the structured result (exit status, package count, reboot flag, snapshot numbers). The GUI parses this JSON to update the UI and append a history record.
+**`twu-ctl`** is a standalone C++20 controller with no Qt dependency. For read-only operations (`status`) it runs as the current user. For mutating operations (`apply`) the GUI launches it under `pkexec`, which prompts for authentication via Polkit before granting root. The controller reads the vendor policy from `~/.config/TumbleweedUpdaterrc`, constructs the `zypper dup` command with the appropriate flags, streams zypper output line-by-line to stdout, then emits a single JSON object as the final line with the structured result (exit status, package count, reboot flag, snapshot numbers, vendor changes). The `status` command also runs `zypper dup --dry-run` with the same flags so the vendor change preview is consistent with what apply will actually do. The GUI parses this JSON to update the UI and append a history record.
 
 This separation means a bug in the GUI cannot silently acquire root, and the controller can be audited, replaced, or tested without touching the UI layer.
 
