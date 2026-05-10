@@ -4,7 +4,7 @@
 # On OBS, use <scm> or upload a tarball with that name.
 
 Name:           tumbleweed-updater
-Version:        0.1.0
+Version:        0.1.2
 Release:        0
 Summary:        KDE-native GUI system updater for openSUSE Tumbleweed
 License:        GPL-2.0-only
@@ -72,5 +72,12 @@ is enforced: the GUI never runs as root — only the small controller binary
 %{_datadir}/icons/hicolor/scalable/apps/tumbleweed-updater.svg
 
 %changelog
+* Sat May 10 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.2-0
+- Fix stale repo cache: run zypper ref via pkexec before status checks
+- Fix history log path mismatch (doubled org/app name in XDG path)
+- Reload History tab when returning from Settings page
+- Add polkit refresh action with auth_admin_keep for background checks
+- Make gear icon toggle Settings page open/closed
+
 * Thu May 07 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.0-0
 - Initial packaging for OBS submission
