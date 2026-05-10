@@ -683,6 +683,22 @@ static int cmd_status()
     return ok ? 0 : 1;
 }
 
+static int cmd_refresh()
+{
+    std::string output;
+    const int rc = run_command_capture("zypper -n ref 2>&1", output);
+
+    const bool ok = (rc == 0);
+    std::cout
+        << "{"
+        << "\"ok\":"       << (ok ? "true" : "false") << ","
+        << "\"details\":\"" << json_escape(output) << "\""
+        << "}\n";
+    std::cout.flush();
+
+    return ok ? 0 : 1;
+}
+
 static int cmd_apply()
 {
     const std::string timestamp    = iso8601_now_utc();
@@ -833,14 +849,15 @@ static int cmd_apply()
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        std::cout << "Usage: twu-ctl status | apply\n";
+        std::cout << "Usage: twu-ctl status | apply | refresh\n";
         return 1;
     }
 
     const std::string cmd = argv[1];
 
-    if (cmd == "status") return cmd_status();
-    if (cmd == "apply")  return cmd_apply();
+    if (cmd == "status")  return cmd_status();
+    if (cmd == "apply")   return cmd_apply();
+    if (cmd == "refresh") return cmd_refresh();
 
     std::cout << "Unknown command: " << cmd << "\n";
     return 1;

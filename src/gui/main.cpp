@@ -20,8 +20,8 @@
 #include <KSharedConfig>
 #include <KConfigGroup>
 
+#include <QDir>
 #include <QFile>
-#include <QStandardPaths>
 
 #include <cstdio>
 
@@ -252,7 +252,8 @@ int main(int argc, char *argv[])
     bool lastUpdatesAvailable = false;
 
     QProcess proc;
-    bool applyInProgress = false;
+    bool applyInProgress   = false;
+    bool refreshInProgress = false;
     QString stdoutAccum;
 
     // Helper: show/raise the main window
@@ -276,6 +277,20 @@ int main(int argc, char *argv[])
             // Drain any data that arrived after the last readyReadStandardOutput
             stdoutAccum += QString::fromUtf8(proc.readAllStandardOutput());
             const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+
+            // Phase 1 (refresh) complete — start the actual status check.
+            // Refresh failure is non-fatal: stale cache beats no check at all.
+            if (refreshInProgress) {
+                refreshInProgress = false;
+                stdoutAccum.clear();
+                proc.start(findTwuCtl(), {"status"});
+                if (!proc.waitForStarted(1000)) {
+                    setProp(root, "statusKind", "error");
+                    setProp(root, "statusText", "❌ Error: could not start status check");
+                    setProp(root, "busy", false);
+                }
+                return;
+            }
 
             UiStatus st;
 
@@ -394,7 +409,8 @@ int main(int argc, char *argv[])
                 return;
             }
 
-            applyInProgress = false;
+            refreshInProgress = true;
+            applyInProgress   = false;
             stdoutAccum.clear();
             setProp(root, "applyLog", QString());
 
@@ -404,8 +420,11 @@ int main(int argc, char *argv[])
                 tray->setStatus(KStatusNotifierItem::Active);
             }
 
-            proc.start(findTwuCtl(), {"status"});
+            // Phase 1: refresh repo metadata under pkexec so zypper lu sees
+            // current package versions, not stale cache.
+            proc.start("pkexec", {findTwuCtl(), "refresh"});
             if (!proc.waitForStarted(1000)) {
+                refreshInProgress = false;
                 setProp(root, "statusKind", "error");
                 setProp(root, "statusText", "❌ Error: could not start controller");
                 setProp(root, "busy", false);
@@ -477,8 +496,7 @@ int main(int argc, char *argv[])
         if (root->property("loadHistoryRequested").toBool()) {
             root->setProperty("loadHistoryRequested", false);
             const QString path =
-                QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
-                + "/history.log";
+                QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
             QFile file(path);
             QString content;
             if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -498,8 +516,7 @@ int main(int argc, char *argv[])
         if (root->property("clearHistoryRequested").toBool()) {
             root->setProperty("clearHistoryRequested", false);
             const QString path =
-                QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
-                + "/history.log";
+                QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
             QFile::remove(path);
             root->setProperty("historyLog", QString());
         }

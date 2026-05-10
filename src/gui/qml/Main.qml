@@ -326,6 +326,15 @@ Kirigami.ApplicationWindow {
             }
         }
 
+        // Reload History when returning from the Settings page
+        Connections {
+            target: pageStack
+            function onCurrentItemChanged() {
+                if (pageStack.depth === 1 && tabBar.currentIndex === 1)
+                    root.loadHistoryRequested = true
+            }
+        }
+
         header: Controls.TabBar {
             id: tabBar
             onCurrentIndexChanged: {

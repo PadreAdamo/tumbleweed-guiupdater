@@ -3,6 +3,20 @@
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
+  <action id="org.padreadamo.tumbleweedupdater.refresh">
+    <description>Refresh openSUSE Tumbleweed repository metadata</description>
+    <message>Authentication is required to refresh repository metadata.</message>
+
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">refresh</annotate>
+  </action>
+
   <action id="org.padreadamo.tumbleweedupdater.apply">
     <description>Apply openSUSE Tumbleweed updates</description>
     <message>Authentication is required to apply system updates.</message>
