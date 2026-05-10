@@ -670,11 +670,14 @@ Kirigami.ApplicationWindow {
             Controls.TextArea {
                 text: {
                     var content = ""
-                    if (root.packageList.length > 0)
-                        content += "── System Packages ──\n" + root.packageList
+                    if (root.packageList.length > 0) {
+                        var sysCount = root.packageList.split("\n").length
+                        content += "── System Packages (" + sysCount + ") ──\n" + root.packageList
+                    }
                     if (root.flatpakList.length > 0) {
+                        var fpCount = root.flatpakList.split("\n").length
                         if (content.length > 0) content += "\n\n"
-                        content += "── Flatpak Apps ──\n" + root.flatpakList
+                        content += "── Flatpak Apps (" + fpCount + ") ──\n" + root.flatpakList
                     }
                     return content
                 }

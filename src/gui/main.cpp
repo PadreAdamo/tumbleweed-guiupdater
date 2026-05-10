@@ -134,7 +134,7 @@ static UiStatus parseStatusJson(const QString &out)
         const int sysCount = updateCount - fpCount;
 
         if (s.flatpakUpdatesAvailable && sysCount > 0) {
-            s.text = QString("⚠️ %1 system updates + %2 Flatpak update%3 available%4")
+            s.text = QString("⚠️ %1 system + %2 Flatpak update%3 available%4")
                          .arg(sysCount).arg(fpCount)
                          .arg(fpCount == 1 ? "" : "s")
                          .arg(suffix);

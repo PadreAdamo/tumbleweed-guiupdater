@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <chrono>
 #include <ctime>
@@ -565,43 +566,77 @@ static void append_history(const std::string &timestamp,
     chown_to_invoking_user(path);
 }
 
-static int checkFlatpakUpdates(std::vector<std::string> &updatableApps)
+// popen strips the TTY so flatpak outputs spaces instead of tabs.
+// Format: " N.   APP_ID   BRANCH   OP   REMOTE   SIZE\n"
+static int checkFlatpakUpdates(std::string &flatpakList)
 {
-    updatableApps.clear();
+    flatpakList.clear();
 
     if (!std::filesystem::exists("/usr/bin/flatpak"))
         return 0;
 
-    std::string refreshOut;
-    run_command_capture("flatpak -y update --appstream 2>&1", refreshOut);
-
+    // List updates — pipe 'n' to answer the confirmation prompt
     std::string output;
-    run_command_capture("flatpak -y update --no-apply-op 2>&1", output);
+    run_command_capture("/bin/sh -c 'echo n | flatpak update 2>&1'", output);
 
-    size_t start = 0;
-    while (start < output.size()) {
-        size_t end = output.find('\n', start);
-        if (end == std::string::npos) end = output.size();
+    std::vector<std::string> apps;
 
-        std::string line = trim_copy(output.substr(start, end - start));
+    std::istringstream stream(output);
+    std::string line;
 
-        if (!line.empty() && std::isdigit(static_cast<unsigned char>(line[0]))) {
-            size_t dotPos = line.find('.');
-            if (dotPos != std::string::npos && dotPos < 3) {
-                std::string rest = trim_copy(line.substr(dotPos + 1));
-                size_t spacePos = rest.find(' ');
-                std::string appId = spacePos != std::string::npos
-                    ? rest.substr(0, spacePos)
-                    : rest;
-                if (!appId.empty())
-                    updatableApps.push_back(appId);
-            }
-        }
+    while (std::getline(stream, line)) {
+        // Strip trailing \r
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
 
-        start = end + 1;
+        // Strip leading whitespace
+        size_t firstNonSpace = line.find_first_not_of(" \t");
+        if (firstNonSpace == std::string::npos)
+            continue;
+
+        // Must start with a digit
+        if (!std::isdigit(static_cast<unsigned char>(line[firstNonSpace])))
+            continue;
+
+        // Find the dot after the number: "1." "2." etc.
+        size_t dotPos = line.find('.', firstNonSpace);
+        if (dotPos == std::string::npos || dotPos > firstNonSpace + 3)
+            continue;
+
+        // Skip all whitespace (spaces or tabs) after the dot to reach the app ID
+        size_t appStart = dotPos + 1;
+        while (appStart < line.size() &&
+               (line[appStart] == ' ' || line[appStart] == '\t'))
+            appStart++;
+
+        if (appStart >= line.size())
+            continue;
+
+        // App ID ends at the next whitespace
+        size_t appEnd = line.find_first_of(" \t", appStart);
+        std::string appId = appEnd != std::string::npos
+            ? line.substr(appStart, appEnd - appStart)
+            : line.substr(appStart);
+
+        // Validate reverse-domain format — must contain a dot
+        if (appId.empty() || appId.find('.') == std::string::npos)
+            continue;
+
+        // Exclude known non-app tokens
+        if (appId == "ID" || appId == "Proceed")
+            continue;
+
+        apps.push_back(appId);
     }
 
-    return static_cast<int>(updatableApps.size());
+    std::cerr << "[twu-ctl] flatpak check: found " << apps.size() << " updates\n";
+
+    for (size_t i = 0; i < apps.size(); i++) {
+        if (i > 0) flatpakList += "\n";
+        flatpakList += apps[i];
+    }
+
+    return static_cast<int>(apps.size());
 }
 
 static int cmd_status()
@@ -699,26 +734,21 @@ static int cmd_status()
         vendorChangeDetected = !vendorChanges.empty();
     }
 
-    // Flatpak check
+    // Flatpak check — always runs regardless of zypper result
     const bool flatpakEnabled = read_flatpak_enabled();
-    std::vector<std::string> flatpakApps;
+    std::string flatpakList;
     int flatpakCount = 0;
-    if (ok && flatpakEnabled) {
-        flatpakCount = checkFlatpakUpdates(flatpakApps);
+    if (flatpakEnabled) {
+        flatpakCount = checkFlatpakUpdates(flatpakList);
     }
     const bool flatpakUpdatesAvailable = flatpakCount > 0;
-    std::string flatpakList;
-    for (size_t i = 0; i < flatpakApps.size(); i++) {
-        if (i > 0) flatpakList += "\n";
-        flatpakList += flatpakApps[i];
-    }
 
     const bool anyUpdatesAvailable = updatesAvailable || flatpakUpdatesAvailable;
     const int  totalUpdateCount    = updateCount + flatpakCount;
 
-    if (ok && flatpakUpdatesAvailable) {
+    if (flatpakUpdatesAvailable) {
         if (updatesAvailable) {
-            summary = std::to_string(updateCount) + " system updates + " +
+            summary = std::to_string(updateCount) + " system + " +
                       std::to_string(flatpakCount) + " Flatpak update" +
                       (flatpakCount == 1 ? "" : "s") + " available";
         } else {
@@ -864,8 +894,8 @@ static int cmd_apply()
     bool flatpakUpdated = false;
     int  flatpakUpdateCount = 0;
     if (ok && read_flatpak_enabled() && std::filesystem::exists("/usr/bin/flatpak")) {
-        std::vector<std::string> flatpakAppsToUpdate;
-        flatpakUpdateCount = checkFlatpakUpdates(flatpakAppsToUpdate);
+        std::string flatpakListApply;
+        flatpakUpdateCount = checkFlatpakUpdates(flatpakListApply);
 
         std::cout << "\n--- Updating Flatpak packages ---\n";
         std::cout.flush();
