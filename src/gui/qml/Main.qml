@@ -29,6 +29,9 @@ Kirigami.ApplicationWindow {
     property string statusKind:     "ok"
     property string statusText:     "Idle"
     property string packageList:    ""
+    property bool   flatpakUpdatesAvailable: false
+    property int    flatpakUpdateCount: 0
+    property string flatpakList:    ""
     property string applyLog:       ""
 
     // ---- History ----
@@ -506,10 +509,15 @@ Kirigami.ApplicationWindow {
                     }
 
                     Controls.Button {
-                        text: root.packageList.length > 0
-                              ? "View " + root.packageList.split("\n").length + " Packages"
-                              : "View Packages"
-                        enabled: root.packageList.length > 0
+                        text: {
+                            var total = 0
+                            if (root.packageList.length > 0)
+                                total += root.packageList.split("\n").length
+                            if (root.flatpakList.length > 0)
+                                total += root.flatpakList.split("\n").length
+                            return total > 0 ? "View " + total + " Packages" : "View Packages"
+                        }
+                        enabled: root.packageList.length > 0 || root.flatpakList.length > 0
                         onClicked: packageDialog.open()
                     }
                 }
@@ -660,7 +668,16 @@ Kirigami.ApplicationWindow {
             clip: true
 
             Controls.TextArea {
-                text: root.packageList
+                text: {
+                    var content = ""
+                    if (root.packageList.length > 0)
+                        content += "── System Packages ──\n" + root.packageList
+                    if (root.flatpakList.length > 0) {
+                        if (content.length > 0) content += "\n\n"
+                        content += "── Flatpak Apps ──\n" + root.flatpakList
+                    }
+                    return content
+                }
                 readOnly: true
                 wrapMode: TextEdit.NoWrap
             }

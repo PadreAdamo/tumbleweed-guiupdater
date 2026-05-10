@@ -64,6 +64,9 @@ struct UiStatus {
     bool       vendorChangeDetected = false;
     int        vendorChangeCount    = 0;
     QJsonArray vendorChanges;
+    bool       flatpakUpdatesAvailable = false;
+    int        flatpakUpdateCount      = 0;
+    QString    flatpakList;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -100,10 +103,13 @@ static UiStatus parseStatusJson(const QString &out)
     s.snapshotPre  = o["snapshotPre"].toInt(-1);
     s.snapshotPost = o["snapshotPost"].toInt(-1);
     s.updateCount  = o["updateCount"].toInt();
-    s.vendorPolicy          = o["vendorPolicy"].toString(QStringLiteral("priority"));
-    s.vendorChangeDetected  = o["vendorChangeDetected"].toBool();
-    s.vendorChangeCount     = o["vendorChangeCount"].toInt();
-    s.vendorChanges         = o["vendorChanges"].toArray();
+    s.vendorPolicy             = o["vendorPolicy"].toString(QStringLiteral("priority"));
+    s.vendorChangeDetected     = o["vendorChangeDetected"].toBool();
+    s.vendorChangeCount        = o["vendorChangeCount"].toInt();
+    s.vendorChanges            = o["vendorChanges"].toArray();
+    s.flatpakUpdatesAvailable  = o["flatpakUpdatesAvailable"].toBool();
+    s.flatpakUpdateCount       = o["flatpakUpdateCount"].toInt();
+    s.flatpakList              = o["flatpakList"].toString();
 
     if (!ok) {
         if (needsAuth) {
@@ -124,10 +130,24 @@ static UiStatus parseStatusJson(const QString &out)
     if (updates) {
         s.kind = "warn";
 
-        if (updateCount > 0)
+        const int fpCount  = s.flatpakUpdateCount;
+        const int sysCount = updateCount - fpCount;
+
+        if (s.flatpakUpdatesAvailable && sysCount > 0) {
+            s.text = QString("⚠️ %1 system updates + %2 Flatpak update%3 available%4")
+                         .arg(sysCount).arg(fpCount)
+                         .arg(fpCount == 1 ? "" : "s")
+                         .arg(suffix);
+        } else if (s.flatpakUpdatesAvailable && sysCount <= 0) {
+            s.text = QString("⚠️ %1 Flatpak update%2 available%3")
+                         .arg(fpCount)
+                         .arg(fpCount == 1 ? "" : "s")
+                         .arg(suffix);
+        } else if (updateCount > 0) {
             s.text = QString("⚠️ %1 updates available%2").arg(updateCount).arg(suffix);
-        else
+        } else {
             s.text = QString("⚠️ Updates available%1").arg(suffix);
+        }
 
         if (!preview.isEmpty())
             s.text += "\n" + preview;
@@ -436,13 +456,16 @@ int main(int argc, char *argv[])
                 vcList.append(m);
             }
 
-            setProp(root, "statusKind",            st.kind);
-            setProp(root, "statusText",            st.text);
-            setProp(root, "updatesAvailable",      st.updatesAvailable);
-            setProp(root, "packageList",           st.packageList);
-            setProp(root, "vendorChangeDetected",  st.vendorChangeDetected);
-            setProp(root, "vendorChangeCount",     st.vendorChangeCount);
-            setProp(root, "vendorChanges",         vcList);
+            setProp(root, "statusKind",               st.kind);
+            setProp(root, "statusText",               st.text);
+            setProp(root, "updatesAvailable",         st.updatesAvailable);
+            setProp(root, "packageList",              st.packageList);
+            setProp(root, "vendorChangeDetected",     st.vendorChangeDetected);
+            setProp(root, "vendorChangeCount",        st.vendorChangeCount);
+            setProp(root, "vendorChanges",            vcList);
+            setProp(root, "flatpakUpdatesAvailable",  st.flatpakUpdatesAvailable);
+            setProp(root, "flatpakUpdateCount",       st.flatpakUpdateCount);
+            setProp(root, "flatpakList",              st.flatpakList);
             setProp(root, "busy", false);
 
             // Expose snapshot numbers to QML and show the rollback banner.
