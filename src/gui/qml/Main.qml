@@ -50,8 +50,49 @@ Kirigami.ApplicationWindow {
     property var  vendorChanges:        []
 
     // ---- Read-only state set by C++ ----
-    property bool   snapperAvailable: false
-    property string appVersion:       ""
+    property bool   snapperAvailable:    false
+    property bool   snapperGuiAvailable: false
+    property string appVersion:          ""
+
+    // ---- Snapper rollback state ----
+    property bool   snapperUsed:       false
+    property int    snapshotPre:       -1
+    property int    snapshotPost:      -1
+    property bool   showSnapperBanner: false
+    property bool   runSnapperGuiRequested: false
+
+    // Rollback trigger and result
+    property int    rollbackSnapshotNum:      -1
+    property int    rollbackSnapshotPost:     -1
+    property string rollbackTimestamp:        ""
+    property bool   runRollbackRequested:     false
+    property bool   rollbackSucceeded:        false
+    property string rollbackOutput:           ""
+    property bool   showRollbackResultDialog: false
+    onShowRollbackResultDialogChanged: {
+        if (showRollbackResultDialog) {
+            showRollbackResultDialog = false
+            rollbackResultDialog.open()
+        }
+    }
+
+    // Post-reboot recovery check
+    property bool   postRebootCheckReady:     false
+    property int    postRebootSnapshotPre:    -1
+    property int    postRebootSnapshotPost:   -1
+    property string postRebootTimestamp:      ""
+    property bool   rebootConfirmedRequested: false
+
+    // Fires once ~800ms after launch if C++ detected a post-reboot update cycle.
+    Timer {
+        interval: 800
+        running: root.postRebootCheckReady
+        repeat: false
+        onTriggered: {
+            root.postRebootCheckReady = false
+            postRebootDialog.open()
+        }
+    }
 
     // ---- Cross-page navigation ----
     property int currentTab: 0   // drives tabBar via Connections
@@ -80,12 +121,27 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    function formatTimestamp(isoStr) {
+        var dt = new Date(isoStr)
+        if (isNaN(dt.getTime())) return isoStr
+        var months = ["Jan","Feb","Mar","Apr","May","Jun",
+                      "Jul","Aug","Sep","Oct","Nov","Dec"]
+        var h = dt.getHours(), m = String(dt.getMinutes()).padStart(2, "0")
+        var ampm = h >= 12 ? "PM" : "AM"
+        h = h % 12 || 12
+        return months[dt.getMonth()] + " " + dt.getDate() + ", " + dt.getFullYear() +
+               " at " + h + ":" + m + " " + ampm
+    }
+
     // ---- History entry formatter ----
     function formatHistoryEntry(entry) {
         var icon = "🔍"
         var primary = ""
 
-        if (entry.operation === "apply") {
+        if (entry.operation === "reboot-confirmed") {
+            icon = "✅"
+            primary = "Confirmed — system running normally after update"
+        } else if (entry.operation === "apply") {
             if (entry.ok) {
                 icon = "✅"
                 primary = "Applied updates"
@@ -386,6 +442,31 @@ Kirigami.ApplicationWindow {
                              : Kirigami.Theme.negativeTextColor
                     }
 
+                    Kirigami.InlineMessage {
+                        width: parent.width
+                        visible: root.showSnapperBanner && root.snapperAvailable &&
+                                 root.snapshotPre > 0
+                        type: Kirigami.MessageType.Information
+                        showCloseButton: true
+                        onVisibleChanged: if (!visible) root.showSnapperBanner = false
+                        text: "Snapshots #" + root.snapshotPre + " (pre) and #" +
+                              root.snapshotPost + " (post) were created before this update. " +
+                              "If something went wrong, you can roll back."
+                        actions: [
+                            Kirigami.Action {
+                                text: root.snapperGuiAvailable ? "Open Snapper"
+                                                               : "Install Snapper GUI"
+                                onTriggered: root.runSnapperGuiRequested = true
+                            },
+                            Kirigami.Action {
+                                text: "How to Roll Back"
+                                onTriggered: Qt.openUrlExternally(
+                                    "https://doc.opensuse.org/documentation/leap/reference/" +
+                                    "html/book-reference/cha-snapper.html")
+                            }
+                        ]
+                    }
+
                     Controls.BusyIndicator {
                         running: root.busy
                         visible: root.busy
@@ -510,14 +591,55 @@ Kirigami.ApplicationWindow {
                     model: historyTab.entries
                     clip: true
 
-                    delegate: Kirigami.SubtitleDelegate {
+                    delegate: Item {
+                        id: histDelegate
                         required property var modelData
                         required property int index
 
                         width: ListView.view.width
+                        implicitHeight: subDelegate.implicitHeight
+
                         readonly property var _fmt: root.formatHistoryEntry(modelData)
-                        text: _fmt.label
-                        subtitle: _fmt.subtitle
+                        readonly property bool canRollBack:
+                            root.snapperAvailable &&
+                            (modelData.snapperUsed ?? false) &&
+                            (modelData.snapshotPre ?? -1) > 0 &&
+                            (modelData.operation ?? "") === "apply" &&
+                            (modelData.ok ?? false)
+
+                        Kirigami.SubtitleDelegate {
+                            id: subDelegate
+                            anchors {
+                                left: parent.left
+                                top: parent.top
+                                bottom: parent.bottom
+                                right: rollBackBtn.visible ? rollBackBtn.left
+                                                          : parent.right
+                                rightMargin: rollBackBtn.visible
+                                             ? Kirigami.Units.smallSpacing : 0
+                            }
+                            text: histDelegate._fmt.label
+                            subtitle: histDelegate._fmt.subtitle
+                        }
+
+                        Controls.Button {
+                            id: rollBackBtn
+                            visible: histDelegate.canRollBack
+                            text: "Roll Back"
+                            icon.name: "edit-undo"
+                            flat: true
+                            anchors.right: parent.right
+                            anchors.rightMargin: Kirigami.Units.smallSpacing
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: {
+                                root.rollbackSnapshotNum  = histDelegate.modelData.snapshotPre
+                                root.rollbackSnapshotPost =
+                                    histDelegate.modelData.snapshotPost ?? -1
+                                root.rollbackTimestamp =
+                                    histDelegate.modelData.timestamp ?? ""
+                                rollbackConfirmDialog.open()
+                            }
+                        }
                     }
                 }
             }
@@ -642,6 +764,110 @@ Kirigami.ApplicationWindow {
                     root.statusText = "Applying updates (admin)…"
                     root.statusKind = "warn"
                     root.runApplyRequested = true
+                }
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: rollbackConfirmDialog
+        title: "Roll Back to Snapshot #" + root.rollbackSnapshotNum + "?"
+        modal: true
+        width: Math.min(root.width * 0.9, 560)
+
+        contentItem: Controls.Label {
+            padding: Kirigami.Units.largeSpacing
+            wrapMode: Text.Wrap
+            text: "This will restore your system to the state it was in before the update\n" +
+                  "applied on " + root.formatTimestamp(root.rollbackTimestamp) + ".\n\n" +
+                  "This operation cannot be undone without applying updates again.\n" +
+                  "Administrator authentication will be required.\n\n" +
+                  "Snapper command that will run:\n" +
+                  "  snapper rollback " + root.rollbackSnapshotNum
+            font.family: "monospace"
+            font.pixelSize: 13
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Cancel"
+                onClicked: rollbackConfirmDialog.close()
+            }
+            Controls.Button {
+                text: "Roll Back Now"
+                onClicked: {
+                    rollbackConfirmDialog.close()
+                    root.runRollbackRequested = true
+                }
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: rollbackResultDialog
+        title: root.rollbackSucceeded ? "Rollback Complete" : "Rollback Failed"
+        modal: true
+        width: Math.min(root.width * 0.85, 520)
+
+        contentItem: Controls.Label {
+            padding: Kirigami.Units.largeSpacing
+            wrapMode: Text.Wrap
+            text: root.rollbackSucceeded
+                  ? "Rollback complete. A reboot is required to apply the restored state.\n\n" +
+                    "Your system has been reverted to snapshot #" + root.rollbackSnapshotNum + "."
+                  : "Rollback failed.\n\n" + root.rollbackOutput
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                visible: root.rollbackSucceeded
+                text: "Reboot Now"
+                onClicked: {
+                    root.runRebootRequested = true
+                    rollbackResultDialog.close()
+                }
+            }
+            Controls.Button {
+                text: root.rollbackSucceeded ? "Later" : "OK"
+                onClicked: rollbackResultDialog.close()
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: postRebootDialog
+        title: "How did the last update go?"
+        modal: true
+        width: Math.min(root.width * 0.9, 560)
+
+        contentItem: Controls.Label {
+            padding: Kirigami.Units.largeSpacing
+            wrapMode: Text.Wrap
+            text: "Your system was updated on " +
+                  root.formatTimestamp(root.postRebootTimestamp) +
+                  " and has since been rebooted.\n\n" +
+                  "Snapshots #" + root.postRebootSnapshotPre + " (pre) and #" +
+                  root.postRebootSnapshotPost + " (post) are available if you need to roll back.\n\n" +
+                  "If everything looks good, dismiss this — Snapper's cleanup algorithm will " +
+                  "manage the snapshots automatically."
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Everything is Fine"
+                onClicked: {
+                    root.rebootConfirmedRequested = true
+                    postRebootDialog.close()
+                }
+            }
+            Controls.Button {
+                text: "I Need to Roll Back"
+                onClicked: {
+                    postRebootDialog.close()
+                    root.rollbackSnapshotNum  = root.postRebootSnapshotPre
+                    root.rollbackSnapshotPost = root.postRebootSnapshotPost
+                    root.rollbackTimestamp    = root.postRebootTimestamp
+                    rollbackConfirmDialog.open()
                 }
             }
         }

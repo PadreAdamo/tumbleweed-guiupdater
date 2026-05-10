@@ -17,6 +17,20 @@
     <annotate key="org.freedesktop.policykit.exec.argv1">refresh</annotate>
   </action>
 
+  <action id="org.padreadamo.tumbleweedupdater.rollback">
+    <description>Roll back system to a Snapper snapshot</description>
+    <message>Authentication is required to roll back the system to a previous snapshot.</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/snapper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">rollback</annotate>
+  </action>
+
   <action id="org.padreadamo.tumbleweedupdater.apply">
     <description>Apply openSUSE Tumbleweed updates</description>
     <message>Authentication is required to apply system updates.</message>

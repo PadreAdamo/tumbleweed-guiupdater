@@ -231,7 +231,8 @@ int main(int argc, char *argv[])
     KConfigGroup vendorPolicyGrp = cfg->group(QStringLiteral("VendorPolicy"));
     QString vendorPolicyMode = vendorPolicyGrp.readEntry("Mode", QStringLiteral("priority"));
 
-    const bool snapperAvailable = QFile::exists(QStringLiteral("/usr/bin/snapper"));
+    const bool snapperAvailable    = QFile::exists(QStringLiteral("/usr/bin/snapper"));
+    const bool snapperGuiAvailable = QFile::exists(QStringLiteral("/usr/bin/snapper-gui"));
 
     setProp(root, "settingsAutoCheckEnabled", autoCheckEnabled);
     setProp(root, "settingsIntervalHours",    intervalHours);
@@ -239,7 +240,67 @@ int main(int argc, char *argv[])
     setProp(root, "settingsFlatpakEnabled",   flatpakEnabled);
     setProp(root, "settingsVendorPolicy",     vendorPolicyMode);
     setProp(root, "snapperAvailable",         snapperAvailable);
+    setProp(root, "snapperGuiAvailable",      snapperGuiAvailable);
     setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
+
+    // Post-reboot recovery check: if the last successful apply with snapshots
+    // happened before the current boot and hasn't been confirmed yet, show the
+    // "how did it go?" dialog once after startup.
+    if (snapperAvailable) {
+        const int lastConfirmed =
+            cfg->group(QStringLiteral("Snapper")).readEntry("LastConfirmedSnapshot", -1);
+
+        const QString histPath =
+            QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
+        QFile histFile(histPath);
+        if (histFile.open(QIODevice::ReadOnly)) {
+            QJsonObject lastApply;
+            const QList<QByteArray> lines = histFile.readAll().split('\n');
+            for (int i = lines.size() - 1; i >= 0; --i) {
+                const QByteArray trimmed = lines[i].trimmed();
+                if (trimmed.isEmpty()) continue;
+                QJsonParseError jerr{};
+                const QJsonDocument jdoc = QJsonDocument::fromJson(trimmed, &jerr);
+                if (jerr.error != QJsonParseError::NoError || !jdoc.isObject()) continue;
+                const QJsonObject obj = jdoc.object();
+                if (obj["operation"].toString() == "apply" &&
+                    obj["ok"].toBool() &&
+                    obj["rebootRequired"].toBool() &&
+                    obj["snapperUsed"].toBool() &&
+                    obj["snapshotPre"].toInt(-1) > 0) {
+                    lastApply = obj;
+                    break;
+                }
+            }
+
+            if (!lastApply.isEmpty()) {
+                const int snapPre = lastApply["snapshotPre"].toInt(-1);
+                if (snapPre > 0 && snapPre != lastConfirmed) {
+                    QFile uptimeFile(QStringLiteral("/proc/uptime"));
+                    if (uptimeFile.open(QIODevice::ReadOnly)) {
+                        const double uptimeSecs =
+                            uptimeFile.readAll().split(' ').first().toDouble();
+                        const QDateTime bootTime =
+                            QDateTime::currentDateTimeUtc()
+                            .addMSecs(-static_cast<qint64>(uptimeSecs * 1000.0));
+                        const QDateTime applyTime = QDateTime::fromString(
+                            lastApply["timestamp"].toString(), Qt::ISODate);
+                        if (applyTime.isValid() && applyTime < bootTime) {
+                            setProp(root, "postRebootSnapshotPre",
+                                    snapPre);
+                            setProp(root, "postRebootSnapshotPost",
+                                    lastApply["snapshotPost"].toInt(-1));
+                            setProp(root, "postRebootTimestamp",
+                                    lastApply["timestamp"].toString());
+                            // QML Timer fires 800ms after the event loop starts
+                            // so the window is fully shown before the dialog opens.
+                            setProp(root, "postRebootCheckReady", true);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     QTimer autoCheckTimer;
     autoCheckTimer.setSingleShot(true);
@@ -252,8 +313,9 @@ int main(int argc, char *argv[])
     bool lastUpdatesAvailable = false;
 
     QProcess proc;
-    bool applyInProgress   = false;
-    bool refreshInProgress = false;
+    bool applyInProgress    = false;
+    bool refreshInProgress  = false;
+    bool rollbackInProgress = false;
     QString stdoutAccum;
 
     // Helper: show/raise the main window
@@ -289,6 +351,20 @@ int main(int argc, char *argv[])
                     setProp(root, "statusText", "❌ Error: could not start status check");
                     setProp(root, "busy", false);
                 }
+                return;
+            }
+
+            // Rollback complete — surface the result in a dialog.
+            if (rollbackInProgress) {
+                rollbackInProgress = false;
+                const bool ok = (exitStatus == QProcess::NormalExit && exitCode == 0);
+                const QString out = stdoutAccum.trimmed();
+                setProp(root, "rollbackSucceeded",
+                        ok);
+                setProp(root, "rollbackOutput",
+                        out.isEmpty() ? err : out + (err.isEmpty() ? "" : "\n" + err));
+                setProp(root, "showRollbackResultDialog", true);
+                setProp(root, "busy",                     false);
                 return;
             }
 
@@ -369,6 +445,15 @@ int main(int argc, char *argv[])
             setProp(root, "vendorChanges",         vcList);
             setProp(root, "busy", false);
 
+            // Expose snapshot numbers to QML and show the rollback banner.
+            if (applyInProgress) {
+                setProp(root, "snapperUsed",  st.snapperUsed);
+                setProp(root, "snapshotPre",  st.snapshotPre);
+                setProp(root, "snapshotPost", st.snapshotPost);
+                if (st.snapperUsed && st.snapshotPre > 0)
+                    setProp(root, "showSnapperBanner", true);
+            }
+
             // Fire reboot dialog only after a successful apply, once busy is clear.
             if (applyInProgress && st.rebootRequired) {
                 setProp(root, "rebootRequired", true);
@@ -412,7 +497,8 @@ int main(int argc, char *argv[])
             refreshInProgress = true;
             applyInProgress   = false;
             stdoutAccum.clear();
-            setProp(root, "applyLog", QString());
+            setProp(root, "applyLog",         QString());
+            setProp(root, "showSnapperBanner", false);
 
             if (tray) {
                 tray->setIconByName(QStringLiteral("tumbleweed-updater"));
@@ -519,6 +605,66 @@ int main(int argc, char *argv[])
                 QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
             QFile::remove(path);
             root->setProperty("historyLog", QString());
+        }
+
+        if (root->property("runSnapperGuiRequested").toBool()) {
+            root->setProperty("runSnapperGuiRequested", false);
+            if (QFile::exists(QStringLiteral("/usr/bin/snapper-gui")))
+                QProcess::startDetached(QStringLiteral("snapper-gui"), {});
+            else
+                QProcess::startDetached(QStringLiteral("konsole"),
+                    {QStringLiteral("-e"), QStringLiteral("sudo"),
+                     QStringLiteral("zypper"), QStringLiteral("install"),
+                     QStringLiteral("snapper-gui")});
+        }
+
+        if (root->property("runRollbackRequested").toBool()) {
+            root->setProperty("runRollbackRequested", false);
+
+            if (proc.state() != QProcess::NotRunning) return;
+
+            const int snapNum = root->property("rollbackSnapshotNum").toInt();
+            if (snapNum <= 0) return;
+
+            rollbackInProgress = true;
+            applyInProgress    = false;
+            refreshInProgress  = false;
+            stdoutAccum.clear();
+            setProp(root, "busy", true);
+
+            proc.start("pkexec", {"snapper", "rollback", QString::number(snapNum)});
+            if (!proc.waitForStarted(1000)) {
+                rollbackInProgress = false;
+                setProp(root, "rollbackSucceeded",        false);
+                setProp(root, "rollbackOutput",
+                        QStringLiteral("Failed to launch snapper rollback."));
+                setProp(root, "showRollbackResultDialog", true);
+                setProp(root, "busy",                     false);
+            }
+        }
+
+        if (root->property("rebootConfirmedRequested").toBool()) {
+            root->setProperty("rebootConfirmedRequested", false);
+            const int snapPre  = root->property("postRebootSnapshotPre").toInt();
+            const int snapPost = root->property("postRebootSnapshotPost").toInt();
+
+            const QString histPath =
+                QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
+            QFile hf(histPath);
+            if (hf.open(QIODevice::Append | QIODevice::Text)) {
+                const QString ts = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+                hf.write(
+                    QString("{\"timestamp\":\"%1\",\"operation\":\"reboot-confirmed\","
+                            "\"ok\":true,\"updateCount\":0,\"rebootRequired\":false,"
+                            "\"snapperUsed\":true,\"snapshotPre\":%2,\"snapshotPost\":%3,"
+                            "\"details\":\"\"}\n")
+                    .arg(ts).arg(snapPre).arg(snapPost).toUtf8());
+            }
+
+            auto wcfg = KSharedConfig::openConfig();
+            wcfg->group(QStringLiteral("Snapper"))
+                .writeEntry("LastConfirmedSnapshot", snapPre);
+            wcfg->sync();
         }
     });
 
