@@ -4,7 +4,7 @@
 # On OBS, use <scm> or upload a tarball with that name.
 
 Name:           tumbleweed-updater
-Version:        0.1.2
+Version:        0.1.3
 Release:        0
 Summary:        KDE-native GUI system updater for openSUSE Tumbleweed
 License:        GPL-2.0-only
@@ -90,6 +90,24 @@ appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.a
 %{_datadir}/metainfo/org.padreadamo.tumbleweedupdater.appdata.xml
 
 %changelog
+* Sun May 11 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.3-0
+- Add Flatpak update detection: cmd_status() checks for Flatpak updates and
+  reports them separately in the status JSON and GUI status text
+- Fix Flatpak detection: trim_copy now strips newlines from fgets output
+- Fix "Find Snapper Tools" button: package snapper-gui does not exist in
+  Tumbleweed repos; open openSUSE software search in browser instead
+- Add systemd user timer (tumbleweed-updater-check.timer) and
+  twu-ctl-notify background notification helper binary
+- Add first-launch dialog offering to enable the systemd timer
+- Add Settings toggle to enable/disable the systemd timer directly
+- Show "Next check: in X hours Y minutes" in Settings when timer is active
+- Sync timer interval via drop-in override file on interval change
+- Fix default check interval: was 4h throughout, now consistently 24h
+- Show History tab entries newest-first
+- Add man pages for tumbleweed-updater(1), twu-ctl(1), twu-ctl-notify(1)
+- Add AppStream metadata (org.padreadamo.tumbleweedupdater.appdata.xml)
+- Remove debug logging from GUI auto-check timer callback
+
 * Sat May 10 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.2-0
 - Fix stale repo cache: run zypper ref via pkexec before status checks
 - Fix history log path mismatch (doubled org/app name in XDG path)
