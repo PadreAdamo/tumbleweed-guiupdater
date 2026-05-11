@@ -109,7 +109,7 @@ All settings are persisted in `~/.config/TumbleweedUpdaterrc` and editable throu
 ```ini
 [AutoCheck]
 Enabled=true
-IntervalHours=4
+IntervalHours=24
 
 [Snapper]
 Enabled=true
@@ -129,7 +129,7 @@ The controller reads this file directly (it has no Qt dependency), so there is n
 
 Background checks are configured automatically on first launch. If the systemd timer is not already enabled, the app will offer to enable it via a one-time dialog. You can enable or disable background checks in the Settings page at any time — no terminal required.
 
-When enabled, `tumbleweed-updater-check.timer` runs `twu-ctl-notify` on a schedule (4 hours by default). The notifier sends a desktop notification when updates are available, and does nothing if the tray app is already running.
+When enabled, `tumbleweed-updater-check.timer` runs `twu-ctl-notify` on a schedule (24 hours by default). The notifier sends a desktop notification when updates are available, and does nothing if the tray app is already running.
 
 Changing the check interval in Settings writes a drop-in override to `~/.config/systemd/user/tumbleweed-updater-check.timer.d/interval.conf` and reloads the timer automatically.
 

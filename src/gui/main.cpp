@@ -241,7 +241,7 @@ int main(int argc, char *argv[])
 
     KConfigGroup autoCheckGrp = cfg->group(QStringLiteral("AutoCheck"));
     bool autoCheckEnabled = autoCheckGrp.readEntry("Enabled", true);
-    int  intervalHours    = autoCheckGrp.readEntry("IntervalHours", 4);
+    int  intervalHours    = autoCheckGrp.readEntry("IntervalHours", 24);
     int  intervalMs       = intervalHours * 60 * 60 * 1000;
 
     KConfigGroup snapperGrp  = cfg->group(QStringLiteral("Snapper"));

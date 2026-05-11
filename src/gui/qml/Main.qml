@@ -57,7 +57,7 @@ Kirigami.ApplicationWindow {
 
     // ---- Settings (read from KConfig by C++ at startup; written back via saveSettingsRequested) ----
     property bool   settingsAutoCheckEnabled: true
-    property int    settingsIntervalHours:    4
+    property int    settingsIntervalHours:    24
     property bool   settingsSnapperEnabled:   true
     property bool   settingsFlatpakEnabled:   false
     property string settingsVendorPolicy:     "priority"
@@ -258,7 +258,7 @@ Kirigami.ApplicationWindow {
 
                     Component.onCompleted: {
                         var idx = hourValues.indexOf(root.settingsIntervalHours)
-                        currentIndex = idx >= 0 ? idx : 2
+                        currentIndex = idx >= 0 ? idx : 4
                     }
 
                     onActivated: function(idx) {
@@ -940,7 +940,7 @@ Kirigami.ApplicationWindow {
             wrapMode: Text.Wrap
             text: "Tumbleweed Updater can check for updates automatically in the " +
                   "background — even when the app is closed — using a systemd timer.\n\n" +
-                  "• Checks every 4 hours by default\n" +
+                  "• Checks every " + (root.settingsIntervalHours === 1 ? "hour" : root.settingsIntervalHours + " hours") + " (configurable in Settings)\n" +
                   "• Sends a notification when updates are found\n" +
                   "• Uses no resources when not checking\n" +
                   "• Can be turned off in Settings at any time"

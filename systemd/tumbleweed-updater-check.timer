@@ -4,7 +4,7 @@ Wants=tumbleweed-updater-check.service
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=4h
+OnUnitActiveSec=24h
 Persistent=true
 
 [Install]
