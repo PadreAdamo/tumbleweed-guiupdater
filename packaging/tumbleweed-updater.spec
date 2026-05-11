@@ -68,6 +68,9 @@ is enforced: the GUI never runs as root — only the small controller binary
 %preun
 %systemd_user_preun tumbleweed-updater-check.timer
 
+%postun
+%systemd_user_postun tumbleweed-updater-check.timer
+
 %files
 %license LICENSE
 %doc README.md

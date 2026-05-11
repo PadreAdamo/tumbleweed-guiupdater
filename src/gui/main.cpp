@@ -22,6 +22,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
+#include <QTextStream>
 
 #include <cstdio>
 
@@ -263,22 +265,62 @@ int main(int argc, char *argv[])
     setProp(root, "snapperGuiAvailable",      snapperGuiAvailable);
     setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
 
-    // Offer to enable the systemd background-check timer on first launch.
-    // Only shown once — tracked by [Timer] OfferShown in KConfig.
+    // Reflect the actual systemd timer state in the UI, then offer first-launch enable.
     {
-        KConfigGroup timerGrp = cfg->group(QStringLiteral("Timer"));
-        const bool offerShown = timerGrp.readEntry("OfferShown", false);
-        if (!offerShown) {
-            timerGrp.writeEntry("OfferShown", true);
-            cfg->sync();
+        QProcess checkTimerState;
+        checkTimerState.start(QStringLiteral("systemctl"),
+            {QStringLiteral("--user"), QStringLiteral("is-enabled"),
+             QStringLiteral("tumbleweed-updater-check.timer")});
+        checkTimerState.waitForFinished(2000);
+        const bool timerCurrentlyEnabled = (checkTimerState.exitCode() == 0);
+        setProp(root, "timerEnabled", timerCurrentlyEnabled);
 
-            QProcess checkTimer;
-            checkTimer.start(QStringLiteral("systemctl"),
-                {QStringLiteral("--user"), QStringLiteral("is-enabled"),
-                 QStringLiteral("tumbleweed-updater-check.timer")});
-            checkTimer.waitForFinished(2000);
-            if (checkTimer.exitCode() != 0)
-                setProp(root, "timerOfferReady", true);
+        if (timerCurrentlyEnabled) {
+            QProcess showTimer;
+            showTimer.start(QStringLiteral("systemctl"),
+                {QStringLiteral("--user"), QStringLiteral("show"),
+                 QStringLiteral("tumbleweed-updater-check.timer"),
+                 QStringLiteral("--property=NextElapseUSecRealtime")});
+            showTimer.waitForFinished(2000);
+            const QString timerOut =
+                QString::fromUtf8(showTimer.readAllStandardOutput()).trimmed();
+            const int eqPos = timerOut.indexOf('=');
+            if (eqPos >= 0) {
+                bool ok;
+                const qint64 usec = timerOut.mid(eqPos + 1).toLongLong(&ok);
+                if (ok && usec > 0) {
+                    const qint64 nowUsec = QDateTime::currentMSecsSinceEpoch() * 1000LL;
+                    const qint64 diffSec = (usec - nowUsec) / 1000000LL;
+                    if (diffSec > 0) {
+                        const int hrs  = static_cast<int>(diffSec / 3600);
+                        const int mins = static_cast<int>((diffSec % 3600) / 60);
+                        QString nextCheck;
+                        if (hrs > 0 && mins > 0)
+                            nextCheck = QString("in %1 hour%2 %3 minute%4")
+                                .arg(hrs).arg(hrs == 1 ? "" : "s")
+                                .arg(mins).arg(mins == 1 ? "" : "s");
+                        else if (hrs > 0)
+                            nextCheck = QString("in %1 hour%2")
+                                .arg(hrs).arg(hrs == 1 ? "" : "s");
+                        else if (mins > 0)
+                            nextCheck = QString("in %1 minute%2")
+                                .arg(mins).arg(mins == 1 ? "" : "s");
+                        else
+                            nextCheck = QStringLiteral("less than a minute");
+                        setProp(root, "nextCheckTime", nextCheck);
+                    }
+                }
+            }
+        }
+
+        // Show offer once if timer has never been enabled.
+        // Tracked by [SystemdTimer] TimerOfferShown in KConfig.
+        KConfigGroup timerGrp = cfg->group(QStringLiteral("SystemdTimer"));
+        const bool offerShown = timerGrp.readEntry("TimerOfferShown", false);
+        if (!offerShown && !timerCurrentlyEnabled) {
+            timerGrp.writeEntry("TimerOfferShown", true);
+            cfg->sync();
+            setProp(root, "timerOfferReady", true);
         }
     }
 
@@ -620,12 +662,24 @@ int main(int argc, char *argv[])
             else
                 autoCheckTimer.stop();
 
-            // Keep the systemd timer interval in sync with the in-app setting
-            QProcess::startDetached(QStringLiteral("systemctl"), {
-                QStringLiteral("--user"), QStringLiteral("set-property"),
-                QStringLiteral("tumbleweed-updater-check.timer"),
-                QStringLiteral("OnUnitActiveSec=") + QString::number(intervalHours) + QStringLiteral("h")
-            });
+            // Persist the new interval as a drop-in override so it survives daemon-reload.
+            const QString dropInDir =
+                QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
+                QStringLiteral("/systemd/user/tumbleweed-updater-check.timer.d");
+            QDir().mkpath(dropInDir);
+            QFile dropIn(dropInDir + QStringLiteral("/interval.conf"));
+            if (dropIn.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream ts(&dropIn);
+                ts << "[Timer]\n";
+                ts << "OnUnitActiveSec=" << intervalHours << "h\n";
+            }
+            QProcess::startDetached(QStringLiteral("systemctl"),
+                {QStringLiteral("--user"), QStringLiteral("daemon-reload")});
+            if (root->property("timerEnabled").toBool()) {
+                QProcess::startDetached(QStringLiteral("systemctl"),
+                    {QStringLiteral("--user"), QStringLiteral("restart"),
+                     QStringLiteral("tumbleweed-updater-check.timer")});
+            }
         }
 
         if (root->property("loadHistoryRequested").toBool()) {
@@ -656,8 +710,20 @@ int main(int argc, char *argv[])
             root->setProperty("historyLog", QString());
         }
 
+        if (root->property("setTimerEnabledRequested").toBool()) {
+            root->setProperty("setTimerEnabledRequested", false);
+            const bool enable = root->property("timerEnabled").toBool();
+            QProcess::startDetached(QStringLiteral("systemctl"), {
+                QStringLiteral("--user"),
+                enable ? QStringLiteral("enable") : QStringLiteral("disable"),
+                QStringLiteral("--now"),
+                QStringLiteral("tumbleweed-updater-check.timer")
+            });
+        }
+
         if (root->property("enableTimerRequested").toBool()) {
             root->setProperty("enableTimerRequested", false);
+            root->setProperty("timerEnabled", true);
             QProcess::startDetached(QStringLiteral("systemctl"),
                 {QStringLiteral("--user"), QStringLiteral("enable"), QStringLiteral("--now"),
                  QStringLiteral("tumbleweed-updater-check.timer")});

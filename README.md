@@ -14,7 +14,7 @@ Tumbleweed GUI Updater keeps your rolling-release system current without requiri
 - **One-click system updates** via `zypper dup` with live streaming output
 - **System tray integration** using KStatusNotifierItem — Wayland-compatible, reflects update/ok/error state
 - **Desktop notifications** via KNotification when updates become available
-- **Automatic background checks** on a configurable interval (1–24 h) with battery awareness — skips the check and retries in 30 minutes when running on battery
+- **Automatic background checks** via a systemd user timer that runs even when the app is closed — configured through the app on first launch or toggled any time in Settings
 - **Reboot detection** after kernel, glibc, or systemd updates, using a three-method cascade: `/run/reboot-required`, zypper output keywords, and a live `uname -r` vs installed kernel comparison
 - **Snapper pre/post snapshots** bracketing every `zypper dup` run — snapshot numbers are shown in the status view so you always know your rollback point
 - **Optional Flatpak updates** run after `zypper dup` with output streamed to the same live log
@@ -122,6 +122,18 @@ Mode=priority
 ```
 
 The controller reads this file directly (it has no Qt dependency), so there is no separate config file to keep in sync.
+
+---
+
+## Background Update Checks
+
+Background checks are configured automatically on first launch. If the systemd timer is not already enabled, the app will offer to enable it via a one-time dialog. You can enable or disable background checks in the Settings page at any time — no terminal required.
+
+When enabled, `tumbleweed-updater-check.timer` runs `twu-ctl-notify` on a schedule (4 hours by default). The notifier sends a desktop notification when updates are available, and does nothing if the tray app is already running.
+
+Changing the check interval in Settings writes a drop-in override to `~/.config/systemd/user/tumbleweed-updater-check.timer.d/interval.conf` and reloads the timer automatically.
+
+---
 
 ### Vendor policy modes
 

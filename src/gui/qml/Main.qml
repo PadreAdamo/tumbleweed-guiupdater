@@ -23,8 +23,11 @@ Kirigami.ApplicationWindow {
     property bool runRebootRequested:  false
     property bool enableTimerRequested: false
 
-    // ---- Systemd timer offer ----
-    property bool timerOfferReady: false
+    // ---- Systemd timer state ----
+    property bool   timerEnabled:             false
+    property bool   setTimerEnabledRequested: false
+    property string nextCheckTime:            ""
+    property bool   timerOfferReady:          false
     Timer {
         interval: 1200
         running: root.timerOfferReady
@@ -218,12 +221,32 @@ Kirigami.ApplicationWindow {
                 }
 
                 Controls.Switch {
+                    id: backgroundCheckSwitch
                     Kirigami.FormData.label: "Background checks"
-                    checked: root.settingsAutoCheckEnabled
+                    checked: root.timerEnabled
                     onToggled: {
+                        root.timerEnabled = checked
                         root.settingsAutoCheckEnabled = checked
+                        root.setTimerEnabledRequested = true
                         root.saveSettingsRequested = true
                     }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: backgroundCheckSwitch.checked
+                        ? "Background checks active (systemd timer)"
+                        : "Background checks disabled"
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    visible: root.timerEnabled && root.nextCheckTime.length > 0
+                    text: "Next check: " + root.nextCheckTime
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
 
                 Controls.ComboBox {
@@ -916,10 +939,11 @@ Kirigami.ApplicationWindow {
             padding: Kirigami.Units.largeSpacing
             wrapMode: Text.Wrap
             text: "Tumbleweed Updater can check for updates automatically in the " +
-                  "background, even when the app is not running, using a systemd timer.\n\n" +
-                  "This will run a check every 4 hours and notify you when updates " +
-                  "are available.\n\n" +
-                  "You can change the interval or disable this in Settings."
+                  "background — even when the app is closed — using a systemd timer.\n\n" +
+                  "• Checks every 4 hours by default\n" +
+                  "• Sends a notification when updates are found\n" +
+                  "• Uses no resources when not checking\n" +
+                  "• Can be turned off in Settings at any time"
         }
 
         footer: Controls.DialogButtonBox {
@@ -928,9 +952,10 @@ Kirigami.ApplicationWindow {
                 onClicked: timerOfferDialog.close()
             }
             Controls.Button {
-                text: "Enable Background Checks"
+                text: "Enable"
                 onClicked: {
                     root.enableTimerRequested = true
+                    root.timerEnabled = true
                     timerOfferDialog.close()
                 }
             }
