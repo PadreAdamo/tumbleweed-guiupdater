@@ -635,10 +635,8 @@ int main(int argc, char *argv[])
             if (QFile::exists(QStringLiteral("/usr/bin/snapper-gui")))
                 QProcess::startDetached(QStringLiteral("snapper-gui"), {});
             else
-                QProcess::startDetached(QStringLiteral("konsole"),
-                    {QStringLiteral("-e"), QStringLiteral("sudo"),
-                     QStringLiteral("zypper"), QStringLiteral("install"),
-                     QStringLiteral("snapper-gui")});
+                QProcess::startDetached(QStringLiteral("xdg-open"),
+                    {QStringLiteral("https://software.opensuse.org/search?q=snapper")});
         }
 
         if (root->property("runRollbackRequested").toBool()) {

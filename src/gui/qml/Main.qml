@@ -458,7 +458,7 @@ Kirigami.ApplicationWindow {
                         actions: [
                             Kirigami.Action {
                                 text: root.snapperGuiAvailable ? "Open Snapper"
-                                                               : "Install Snapper GUI"
+                                                               : "Find Snapper Tools"
                                 onTriggered: root.runSnapperGuiRequested = true
                             },
                             Kirigami.Action {
