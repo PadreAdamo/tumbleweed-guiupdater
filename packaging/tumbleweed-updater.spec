@@ -84,6 +84,7 @@ appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.a
 %{_datadir}/polkit-1/actions/org.padreadamo.tumbleweedupdater.policy
 %{_datadir}/applications/tumbleweed-updater.desktop
 %{_datadir}/icons/hicolor/scalable/apps/tumbleweed-updater.svg
+%{_mandir}/man1/tumbleweed-updater.1%{?ext_man}
 %{_mandir}/man1/twu-ctl.1%{?ext_man}
 %{_mandir}/man1/twu-ctl-notify.1%{?ext_man}
 %{_datadir}/metainfo/org.padreadamo.tumbleweedupdater.appdata.xml

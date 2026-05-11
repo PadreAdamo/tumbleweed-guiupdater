@@ -1,0 +1,89 @@
+.TH TUMBLEWEED-UPDATER 1 "2026-05-07" "0.1.0" "Tumbleweed Updater"
+.SH NAME
+tumbleweed-updater \- KDE-native system update orchestrator for openSUSE Tumbleweed
+.SH SYNOPSIS
+.B tumbleweed-updater
+.SH DESCRIPTION
+.B tumbleweed-updater
+is a KDE Plasma graphical interface for keeping an openSUSE Tumbleweed
+system up to date using the recommended
+.BR "zypper dup" (8)
+workflow.
+.PP
+The application runs in the system tray and provides:
+.TP
+\(bu
+One-click system updates with live streaming progress output
+.TP
+\(bu
+System tray integration with update status badge (Wayland-compatible)
+.TP
+\(bu
+Automatic background update checks via systemd user timer
+.TP
+\(bu
+Snapper pre/post snapshot integration for safe rollback
+.TP
+\(bu
+Optional Flatpak update support
+.TP
+\(bu
+Vendor change detection and configurable vendor policy
+.TP
+\(bu
+Persistent update history log with rollback actions
+.TP
+\(bu
+KDE-native settings via KConfig
+.PP
+.B tumbleweed-updater
+is not a package manager. It does not support package search,
+installation, or removal. Its sole purpose is keeping a Tumbleweed
+system current safely and reliably.
+.PP
+Privilege escalation for update operations is handled via
+.BR pkexec (1)
+\(em the GUI never runs as root.
+.SH OPTIONS
+.B tumbleweed-updater
+takes no command-line options. All configuration is managed
+through the in-application Settings page.
+.SH BACKGROUND CHECKS
+Automatic background update checks can be enabled via the Settings
+page. When enabled, a systemd user timer runs
+.BR twu-ctl-notify (1)
+on a configurable interval to check for updates and send desktop
+notifications even when the GUI is not running.
+.PP
+To manage the timer manually:
+.PP
+.nf
+systemctl --user status tumbleweed-updater-check.timer
+systemctl --user enable --now tumbleweed-updater-check.timer
+systemctl --user disable --now tumbleweed-updater-check.timer
+.fi
+.SH FILES
+.TP
+.I ~/.config/TumbleweedUpdaterrc
+User configuration file in KConfig INI format.
+Controls vendor policy, Snapper integration, Flatpak updates,
+auto-check interval, and systemd timer preferences.
+.TP
+.I ~/.local/share/TumbleweedUpdater/history.log
+Update history log in JSONL format (one JSON object per line).
+Records all status checks and apply operations.
+.TP
+.I ~/.config/systemd/user/tumbleweed-updater-check.timer.d/interval.conf
+Drop-in override for the systemd timer interval.
+Written automatically when the check interval is changed in Settings.
+.SH SEE ALSO
+.BR twu-ctl (1),
+.BR twu-ctl-notify (1),
+.BR zypper (8),
+.BR snapper (8),
+.BR pkexec (1),
+.BR systemctl (1)
+.SH AUTHORS
+Adam Girardo
+.SH LICENSE
+GPL-2.0-only

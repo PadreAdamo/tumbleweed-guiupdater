@@ -37,6 +37,7 @@ install(FILES
 
 # Man pages
 install(FILES
+    docs/tumbleweed-updater.1
     docs/twu-ctl.1
     docs/twu-ctl-notify.1
     DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
