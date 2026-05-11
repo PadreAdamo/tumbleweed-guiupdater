@@ -72,9 +72,9 @@ static std::string json_escape(const std::string &s)
 
 static std::string trim_copy(const std::string &s)
 {
-    const size_t left = s.find_first_not_of(" \t");
+    const size_t left = s.find_first_not_of(" \t\r\n");
     if (left == std::string::npos) return "";
-    const size_t right = s.find_last_not_of(" \t");
+    const size_t right = s.find_last_not_of(" \t\r\n");
     return s.substr(left, right - left + 1);
 }
 
@@ -628,8 +628,6 @@ static int checkFlatpakUpdates(std::string &flatpakList)
 
         apps.push_back(appId);
     }
-
-    std::cerr << "[twu-ctl] flatpak check: found " << apps.size() << " updates\n";
 
     for (size_t i = 0; i < apps.size(); i++) {
         if (i > 0) flatpakList += "\n";
