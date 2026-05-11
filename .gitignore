@@ -40,4 +40,25 @@
 # debug information files
 *.dwo
 
+# Build artifacts
 build/
+install_manifest.txt
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+
+# Qt generated
+*_autogen/
+moc_*.cpp
+moc_predefs.h
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

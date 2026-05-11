@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!-- SPDX-FileCopyrightText: 2026 Adam Girardo <adamjohngirardo@gmail.com> -->
 <component type="desktop-application">
   <id>org.padreadamo.tumbleweedupdater</id>
 
@@ -76,7 +78,7 @@
 
   <categories>
     <category>System</category>
-    <category>PackageManager</category>
+    <category>Utility</category>
   </categories>
 
   <keywords>

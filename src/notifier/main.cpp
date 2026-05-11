@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2026 Adam Girardo <adamjohngirardo@gmail.com>
+
 #include <array>
 #include <cstdio>
+#include <iostream>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -84,8 +88,47 @@ static void write_last_notified_count(int count)
     if (f) f << count << "\n";
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    if (argc > 1) {
+        const std::string arg = argv[1];
+        if (arg == "--help" || arg == "-h") {
+            std::cout <<
+                "Usage: twu-ctl-notify\n"
+                "\n"
+                "Tumbleweed Updater background notification helper.\n"
+                "\n"
+                "Checks for available system updates and sends a desktop\n"
+                "notification if updates are found and the count has changed\n"
+                "since the last notification.\n"
+                "\n"
+                "This command is normally invoked by the systemd user timer\n"
+                "tumbleweed-updater-check.timer, not directly by the user.\n"
+                "\n"
+                "If tumbleweed-updater is already running in the system tray,\n"
+                "this command exits silently -- the tray handles notification.\n"
+                "\n"
+                "Options:\n"
+                "  --help     Show this help message\n"
+                "  --version  Show version information\n"
+                "\n"
+                "Files:\n"
+                "  ~/.local/share/TumbleweedUpdater/last-notified-count\n"
+                "             Stores the last notified update count to\n"
+                "             prevent duplicate notifications.\n"
+                "\n"
+                "See also: twu-ctl(1), tumbleweed-updater(1)\n";
+            return 0;
+        }
+        if (arg == "--version" || arg == "-v") {
+            std::cout << "twu-ctl-notify 0.1.3\n";
+            return 0;
+        }
+        std::cerr << "twu-ctl-notify: unknown option: " << arg << "\n";
+        std::cerr << "Try 'twu-ctl-notify --help' for more information.\n";
+        return 1;
+    }
+
     // Run the unprivileged status check
     std::string statusOut;
     run_command_capture("/usr/bin/twu-ctl status 2>/dev/null", statusOut);

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Adam Girardo <adamjohngirardo@gmail.com>
+
 find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(QT6CORE    REQUIRED IMPORTED_TARGET Qt6Core)

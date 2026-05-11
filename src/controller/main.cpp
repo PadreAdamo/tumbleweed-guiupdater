@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2026 Adam Girardo <adamjohngirardo@gmail.com>
+
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -777,8 +780,13 @@ static int cmd_status()
         << "\"timestamp\":\""          << json_escape(timestamp) << "\""
         << "}\n";
 
-    append_history(timestamp, "status", ok, totalUpdateCount, rebootRequired,
-                   false, -1, -1, summary);
+    // Only log status checks that found something noteworthy.
+    // Routine "up to date" checks are not recorded to avoid log spam.
+    const bool worthLogging = anyUpdatesAvailable || !ok || needsAuth;
+    if (worthLogging)
+        append_history(timestamp, "status", ok, totalUpdateCount, rebootRequired,
+                       false, -1, -1, summary);
+
     return ok ? 0 : 1;
 }
 
@@ -953,16 +961,47 @@ static int cmd_apply()
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        std::cout << "Usage: twu-ctl status | apply | refresh\n";
+        std::cout <<
+            "Usage: twu-ctl <command>\n"
+            "\n"
+            "Commands:\n"
+            "  status    Check for available updates\n"
+            "  apply     Apply pending updates (requires root via pkexec)\n"
+            "  refresh   Refresh repository metadata (requires root via pkexec)\n"
+            "\n"
+            "Options:\n"
+            "  --help     Show this help message\n"
+            "  --version  Show version information\n";
         return 1;
     }
 
     const std::string cmd = argv[1];
 
+    if (cmd == "--help" || cmd == "-h") {
+        std::cout <<
+            "Usage: twu-ctl <command>\n"
+            "\n"
+            "Commands:\n"
+            "  status    Check for available updates\n"
+            "  apply     Apply pending updates (requires root via pkexec)\n"
+            "  refresh   Refresh repository metadata (requires root via pkexec)\n"
+            "\n"
+            "Options:\n"
+            "  --help     Show this help message\n"
+            "  --version  Show version information\n";
+        return 0;
+    }
+
+    if (cmd == "--version" || cmd == "-v") {
+        std::cout << "twu-ctl 0.1.3\n";
+        return 0;
+    }
+
     if (cmd == "status")  return cmd_status();
     if (cmd == "apply")   return cmd_apply();
     if (cmd == "refresh") return cmd_refresh();
 
-    std::cout << "Unknown command: " << cmd << "\n";
+    std::cerr << "twu-ctl: unknown command: " << cmd << "\n";
+    std::cerr << "Try 'twu-ctl --help' for more information.\n";
     return 1;
 }

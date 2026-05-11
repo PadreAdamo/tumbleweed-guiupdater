@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2026 Adam Girardo <adamjohngirardo@gmail.com>
+
 import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
@@ -512,11 +515,6 @@ Kirigami.ApplicationWindow {
                         anchors.horizontalCenter: parent.horizontalCenter
                     }
 
-                    Controls.CheckBox {
-                        text: "Check for updates on launch"
-                        checked: appSettings.autoCheckOnLaunch
-                        onToggled: appSettings.autoCheckOnLaunch = checked
-                    }
 
                     Controls.Button {
                         text: root.busy && !root.runApplyRequested ? "Checking…" : "Check Status"
