@@ -21,6 +21,19 @@ Kirigami.ApplicationWindow {
     property bool runStatusRequested:  false
     property bool runApplyRequested:   false
     property bool runRebootRequested:  false
+    property bool enableTimerRequested: false
+
+    // ---- Systemd timer offer ----
+    property bool timerOfferReady: false
+    Timer {
+        interval: 1200
+        running: root.timerOfferReady
+        repeat: false
+        onTriggered: {
+            root.timerOfferReady = false
+            timerOfferDialog.open()
+        }
+    }
 
     // ---- Status / UI state ----
     property bool   busy:           false
@@ -888,6 +901,37 @@ Kirigami.ApplicationWindow {
                     root.rollbackSnapshotPost = root.postRebootSnapshotPost
                     root.rollbackTimestamp    = root.postRebootTimestamp
                     rollbackConfirmDialog.open()
+                }
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: timerOfferDialog
+        title: "Enable Background Update Checks?"
+        modal: true
+        width: Math.min(root.width * 0.9, 560)
+
+        contentItem: Controls.Label {
+            padding: Kirigami.Units.largeSpacing
+            wrapMode: Text.Wrap
+            text: "Tumbleweed Updater can check for updates automatically in the " +
+                  "background, even when the app is not running, using a systemd timer.\n\n" +
+                  "This will run a check every 4 hours and notify you when updates " +
+                  "are available.\n\n" +
+                  "You can change the interval or disable this in Settings."
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Not Now"
+                onClicked: timerOfferDialog.close()
+            }
+            Controls.Button {
+                text: "Enable Background Checks"
+                onClicked: {
+                    root.enableTimerRequested = true
+                    timerOfferDialog.close()
                 }
             }
         }

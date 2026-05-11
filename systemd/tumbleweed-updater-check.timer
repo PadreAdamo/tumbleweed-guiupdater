@@ -1,0 +1,11 @@
+[Unit]
+Description=Tumbleweed Updater periodic update check
+Wants=tumbleweed-updater-check.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=4h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

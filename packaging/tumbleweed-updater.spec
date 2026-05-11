@@ -28,6 +28,7 @@ BuildRequires:  kf6-kstatusnotifieritem-devel
 # polkit-devel provides the pkexec policy validation tool used at install time
 BuildRequires:  polkit-devel
 BuildRequires:  desktop-file-utils
+BuildRequires:  systemd-rpm-macros
 
 Requires:       zypper
 Requires:       polkit
@@ -61,11 +62,20 @@ is enforced: the GUI never runs as root — only the small controller binary
 %install
 %cmake_install
 
+%post
+%systemd_user_post tumbleweed-updater-check.timer
+
+%preun
+%systemd_user_preun tumbleweed-updater-check.timer
+
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/tumbleweed-updater
 %{_bindir}/twu-ctl
+%{_bindir}/twu-ctl-notify
+%{_userunitdir}/tumbleweed-updater-check.service
+%{_userunitdir}/tumbleweed-updater-check.timer
 %{_datadir}/knotifications6/TumbleweedUpdater.notifyrc
 %{_datadir}/polkit-1/actions/org.padreadamo.tumbleweedupdater.policy
 %{_datadir}/applications/tumbleweed-updater.desktop

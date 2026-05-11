@@ -16,6 +16,7 @@ include(ECMInstallIcons)
 
 add_subdirectory(src/gui)
 add_subdirectory(src/controller)
+add_subdirectory(src/notifier)
 
 # Polkit policy — allows pkexec to run twu-ctl apply as root
 install(FILES polkit/org.padreadamo.tumbleweedupdater.policy
@@ -26,3 +27,10 @@ install(FILES polkit/org.padreadamo.tumbleweedupdater.policy
 ecm_install_icons(ICONS icons/sc-apps-tumbleweed-updater.svg
                   DESTINATION ${KDE_INSTALL_ICONDIR}
                   THEME hicolor)
+
+# Systemd user units for background update checks
+install(FILES
+    systemd/tumbleweed-updater-check.service
+    systemd/tumbleweed-updater-check.timer
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/systemd/user
+)

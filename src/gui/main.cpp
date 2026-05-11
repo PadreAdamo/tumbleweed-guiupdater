@@ -263,6 +263,25 @@ int main(int argc, char *argv[])
     setProp(root, "snapperGuiAvailable",      snapperGuiAvailable);
     setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
 
+    // Offer to enable the systemd background-check timer on first launch.
+    // Only shown once — tracked by [Timer] OfferShown in KConfig.
+    {
+        KConfigGroup timerGrp = cfg->group(QStringLiteral("Timer"));
+        const bool offerShown = timerGrp.readEntry("OfferShown", false);
+        if (!offerShown) {
+            timerGrp.writeEntry("OfferShown", true);
+            cfg->sync();
+
+            QProcess checkTimer;
+            checkTimer.start(QStringLiteral("systemctl"),
+                {QStringLiteral("--user"), QStringLiteral("is-enabled"),
+                 QStringLiteral("tumbleweed-updater-check.timer")});
+            checkTimer.waitForFinished(2000);
+            if (checkTimer.exitCode() != 0)
+                setProp(root, "timerOfferReady", true);
+        }
+    }
+
     // Post-reboot recovery check: if the last successful apply with snapshots
     // happened before the current boot and hasn't been confirmed yet, show the
     // "how did it go?" dialog once after startup.
@@ -600,6 +619,13 @@ int main(int argc, char *argv[])
                 autoCheckTimer.start(intervalMs);
             else
                 autoCheckTimer.stop();
+
+            // Keep the systemd timer interval in sync with the in-app setting
+            QProcess::startDetached(QStringLiteral("systemctl"), {
+                QStringLiteral("--user"), QStringLiteral("set-property"),
+                QStringLiteral("tumbleweed-updater-check.timer"),
+                QStringLiteral("OnUnitActiveSec=") + QString::number(intervalHours) + QStringLiteral("h")
+            });
         }
 
         if (root->property("loadHistoryRequested").toBool()) {
@@ -628,6 +654,13 @@ int main(int argc, char *argv[])
                 QDir::homePath() + QStringLiteral("/.local/share/TumbleweedUpdater/history.log");
             QFile::remove(path);
             root->setProperty("historyLog", QString());
+        }
+
+        if (root->property("enableTimerRequested").toBool()) {
+            root->setProperty("enableTimerRequested", false);
+            QProcess::startDetached(QStringLiteral("systemctl"),
+                {QStringLiteral("--user"), QStringLiteral("enable"), QStringLiteral("--now"),
+                 QStringLiteral("tumbleweed-updater-check.timer")});
         }
 
         if (root->property("runSnapperGuiRequested").toBool()) {
