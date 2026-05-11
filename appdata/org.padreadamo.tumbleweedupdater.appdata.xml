@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.padreadamo.tumbleweedupdater</id>
+
+  <name>Tumbleweed Updater</name>
+  <summary>KDE-native system update orchestrator for openSUSE Tumbleweed</summary>
+
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-2.0-only</project_license>
+
+  <description>
+    <p>
+      Tumbleweed Updater is a KDE-native system update orchestrator for
+      openSUSE Tumbleweed. It provides a simple, policy-driven way to keep
+      a Tumbleweed system up to date using the recommended zypper dup
+      workflow — without exposing package management complexity.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>One-click system updates via zypper dup</li>
+      <li>Live streaming output during update apply</li>
+      <li>System tray integration with status badge (Wayland-compatible)</li>
+      <li>Automatic background update checks via systemd user timer</li>
+      <li>Reboot detection after kernel and core library updates</li>
+      <li>Snapper pre/post snapshot integration for safe rollback</li>
+      <li>Optional Flatpak update support</li>
+      <li>Persistent update history log with rollback actions</li>
+      <li>KDE-native settings page</li>
+      <li>Vendor change detection and policy control</li>
+    </ul>
+    <p>
+      Tumbleweed Updater is not a package manager. It does not support
+      package search, installation, or removal. Its sole purpose is keeping
+      a Tumbleweed system current, safely and reliably.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">tumbleweed-updater.desktop</launchable>
+
+  <url type="homepage">https://github.com/padreadamo/tumbleweed-guiupdater</url>
+  <url type="bugtracker">https://github.com/padreadamo/tumbleweed-guiupdater/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window showing available updates</caption>
+      <image>https://raw.githubusercontent.com/padreadamo/tumbleweed-guiupdater/main/docs/screenshots/main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Update history log with rollback actions</caption>
+      <image>https://raw.githubusercontent.com/padreadamo/tumbleweed-guiupdater/main/docs/screenshots/history.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Settings page</caption>
+      <image>https://raw.githubusercontent.com/padreadamo/tumbleweed-guiupdater/main/docs/screenshots/settings.png</image>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2026-05-07">
+      <description>
+        <p>Initial release.</p>
+        <ul>
+          <li>System update orchestration via zypper dup</li>
+          <li>KDE Plasma system tray integration</li>
+          <li>Snapper snapshot integration</li>
+          <li>Flatpak update support</li>
+          <li>Systemd user timer for background checks</li>
+          <li>Vendor change detection and policy control</li>
+          <li>Update history log with rollback support</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+
+  <categories>
+    <category>System</category>
+    <category>PackageManager</category>
+  </categories>
+
+  <keywords>
+    <keyword>update</keyword>
+    <keyword>updater</keyword>
+    <keyword>zypper</keyword>
+    <keyword>tumbleweed</keyword>
+    <keyword>opensuse</keyword>
+    <keyword>system</keyword>
+    <keyword>rolling</keyword>
+  </keywords>
+
+  <provides>
+    <binary>tumbleweed-updater</binary>
+    <binary>twu-ctl</binary>
+  </provides>
+</component>

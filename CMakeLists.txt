@@ -34,3 +34,16 @@ install(FILES
     systemd/tumbleweed-updater-check.timer
     DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/systemd/user
 )
+
+# Man pages
+install(FILES
+    docs/twu-ctl.1
+    docs/twu-ctl-notify.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+)
+
+# AppStream metadata
+install(FILES
+    appdata/org.padreadamo.tumbleweedupdater.appdata.xml
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+)

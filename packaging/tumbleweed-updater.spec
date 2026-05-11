@@ -29,6 +29,7 @@ BuildRequires:  kf6-kstatusnotifieritem-devel
 BuildRequires:  polkit-devel
 BuildRequires:  desktop-file-utils
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  appstream-glib
 
 Requires:       zypper
 Requires:       polkit
@@ -57,7 +58,7 @@ is enforced: the GUI never runs as root — only the small controller binary
 %cmake_build
 
 %check
-# No automated test suite yet.
+appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.appdata.xml
 
 %install
 %cmake_install
@@ -83,6 +84,9 @@ is enforced: the GUI never runs as root — only the small controller binary
 %{_datadir}/polkit-1/actions/org.padreadamo.tumbleweedupdater.policy
 %{_datadir}/applications/tumbleweed-updater.desktop
 %{_datadir}/icons/hicolor/scalable/apps/tumbleweed-updater.svg
+%{_mandir}/man1/twu-ctl.1%{?ext_man}
+%{_mandir}/man1/twu-ctl-notify.1%{?ext_man}
+%{_datadir}/metainfo/org.padreadamo.tumbleweedupdater.appdata.xml
 
 %changelog
 * Sat May 10 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.2-0

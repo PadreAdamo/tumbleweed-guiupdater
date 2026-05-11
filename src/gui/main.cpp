@@ -847,13 +847,11 @@ int main(int argc, char *argv[])
     QObject::connect(&autoCheckTimer, &QTimer::timeout, &app, [&]() {
         if (!root->property("settingsAutoCheckEnabled").toBool()) return;
         if (isOnBattery()) {
-            fprintf(stderr, "[auto-check] on battery — rescheduling in 30 minutes\n");
             autoCheckTimer.start(30 * 60 * 1000);
             return;
         }
         autoCheckTimer.start(intervalMs);
         if (root->property("busy").toBool()) return;
-        fprintf(stderr, "[auto-check] triggering background status check\n");
         root->setProperty("busy", true);
         root->setProperty("statusText", "Checking for updates…");
         root->setProperty("statusKind", "ok");

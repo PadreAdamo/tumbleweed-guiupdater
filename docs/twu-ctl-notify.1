@@ -1,0 +1,37 @@
+.TH TWU-CTL-NOTIFY 1 "2026-05-07" "0.1.0" "Tumbleweed Updater"
+.SH NAME
+twu-ctl-notify \- Tumbleweed Updater background notification helper
+.SH SYNOPSIS
+.B twu-ctl-notify
+.SH DESCRIPTION
+.B twu-ctl-notify
+is invoked by the systemd user timer
+.B tumbleweed-updater-check.timer
+to perform a background update check and notify the user
+if updates are available.
+.PP
+If the Tumbleweed Updater GUI is already running,
+.B twu-ctl-notify
+exits silently \(em the GUI tray handles notification in that case.
+.PP
+To avoid notification spam,
+.B twu-ctl-notify
+records the last notified update count and only sends a new
+notification when the count changes.
+.SH EXIT STATUS
+Always exits with status 0 to prevent systemd from marking
+the service as failed on transient errors such as network
+unavailability.
+.SH FILES
+.TP
+.I ~/.local/share/TumbleweedUpdater/last-notified-count
+Stores the update count from the last notification to prevent
+duplicate notifications across timer runs.
+.SH SEE ALSO
+.BR tumbleweed-updater (1),
+.BR twu-ctl (1),
+.BR systemctl (1)
+.SH AUTHORS
+Adam Girardo
+.SH LICENSE
+GPL-2.0-only

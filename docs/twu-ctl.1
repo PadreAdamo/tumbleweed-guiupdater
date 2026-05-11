@@ -1,0 +1,62 @@
+.TH TWU-CTL 1 "2026-05-07" "0.1.0" "Tumbleweed Updater"
+.SH NAME
+twu-ctl \- Tumbleweed Updater controller
+.SH SYNOPSIS
+.B twu-ctl
+.I command
+.SH DESCRIPTION
+.B twu-ctl
+is the unprivileged controller component of Tumbleweed Updater.
+It checks for and applies system updates on openSUSE Tumbleweed,
+returning structured JSON output for consumption by the GUI frontend.
+.PP
+The
+.B apply
+command must be invoked via
+.BR pkexec (1)
+to obtain the necessary root privileges.
+.SH COMMANDS
+.TP
+.B status
+Check for available updates using
+.BR zypper (8)
+and return a JSON object describing the current update state,
+including package count, vendor changes, Flatpak updates,
+and whether a reboot will be required.
+.TP
+.B apply
+Apply pending system updates using
+.BR "zypper dup" (8).
+Must be run as root via pkexec.
+Streams progress output followed by a final JSON result object.
+Optionally creates Snapper pre/post snapshots and updates Flatpak apps.
+.TP
+.B refresh
+Refresh repository metadata using
+.BR "zypper ref" (8).
+Must be run as root via pkexec.
+.SH OUTPUT
+All commands output a JSON object to stdout.
+Progress output during
+.B apply
+is streamed as plain text lines,
+with the final JSON result on the last line.
+.SH FILES
+.TP
+.I ~/.config/TumbleweedUpdaterrc
+User configuration file in KConfig INI format.
+Controls vendor policy, Snapper integration, Flatpak updates,
+and auto-check interval.
+.TP
+.I ~/.local/share/TumbleweedUpdater/history.log
+Update history log in JSONL format (one JSON object per line).
+.SH SEE ALSO
+.BR tumbleweed-updater (1),
+.BR twu-ctl-notify (1),
+.BR zypper (8),
+.BR snapper (8),
+.BR pkexec (1)
+.SH AUTHORS
+Adam Girardo
+.SH LICENSE
+GPL-2.0-only
