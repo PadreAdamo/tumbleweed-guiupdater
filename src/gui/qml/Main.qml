@@ -596,6 +596,7 @@ Kirigami.ApplicationWindow {
                         if (!line) continue
                         try { result.push(JSON.parse(line)) } catch(e) {}
                     }
+                    result.reverse()
                     return result
                 }
 
