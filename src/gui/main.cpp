@@ -256,17 +256,22 @@ int main(int argc, char *argv[])
     KConfigGroup vendorPolicyGrp = cfg->group(QStringLiteral("VendorPolicy"));
     QString vendorPolicyMode = vendorPolicyGrp.readEntry("Mode", QStringLiteral("priority"));
 
-    const bool snapperAvailable    = QFile::exists(QStringLiteral("/usr/bin/snapper"));
-    const bool snapperGuiAvailable = QFile::exists(QStringLiteral("/usr/bin/snapper-gui"));
+    const bool snapperAvailable       = QFile::exists(QStringLiteral("/usr/bin/snapper"));
+    const bool snapperGuiAvailable    = QFile::exists(QStringLiteral("/usr/bin/snapper-gui"));
+    const bool kdesuAvailable         = QFile::exists(QStringLiteral("/usr/bin/kdesu"));
+    const bool yastAvailable          = QFile::exists(QStringLiteral("/sbin/yast2"));
+    const bool anySnapperToolAvailable = (kdesuAvailable && yastAvailable) || snapperGuiAvailable;
 
-    setProp(root, "settingsAutoCheckEnabled", autoCheckEnabled);
-    setProp(root, "settingsIntervalHours",    intervalHours);
-    setProp(root, "settingsSnapperEnabled",   snapperEnabled);
-    setProp(root, "settingsFlatpakEnabled",   flatpakEnabled);
-    setProp(root, "settingsVendorPolicy",     vendorPolicyMode);
-    setProp(root, "snapperAvailable",         snapperAvailable);
-    setProp(root, "snapperGuiAvailable",      snapperGuiAvailable);
-    setProp(root, "appVersion",               QStringLiteral(APP_VERSION));
+    setProp(root, "settingsAutoCheckEnabled",  autoCheckEnabled);
+    setProp(root, "settingsIntervalHours",     intervalHours);
+    setProp(root, "settingsSnapperEnabled",    snapperEnabled);
+    setProp(root, "settingsFlatpakEnabled",    flatpakEnabled);
+    setProp(root, "settingsVendorPolicy",      vendorPolicyMode);
+    setProp(root, "snapperAvailable",          snapperAvailable);
+    setProp(root, "snapperGuiAvailable",       snapperGuiAvailable);
+    setProp(root, "yastAvailable",             yastAvailable && kdesuAvailable);
+    setProp(root, "anySnapperToolAvailable",   anySnapperToolAvailable);
+    setProp(root, "appVersion",                QStringLiteral(APP_VERSION));
 
     // Reflect the actual systemd timer state in the UI, then offer first-launch enable.
     {
@@ -732,13 +737,22 @@ int main(int argc, char *argv[])
                  QStringLiteral("tumbleweed-updater-check.timer")});
         }
 
-        if (root->property("runSnapperGuiRequested").toBool()) {
-            root->setProperty("runSnapperGuiRequested", false);
-            if (QFile::exists(QStringLiteral("/usr/bin/snapper-gui")))
-                QProcess::startDetached(QStringLiteral("snapper-gui"), {});
-            else
+        if (root->property("openSnapperToolRequested").toBool()) {
+            root->setProperty("openSnapperToolRequested", false);
+            if (QFile::exists(QStringLiteral("/usr/bin/kdesu")) &&
+                QFile::exists(QStringLiteral("/sbin/yast2"))) {
+                QProcess::startDetached(QStringLiteral("kdesu"),
+                    {QStringLiteral("/sbin/yast2"), QStringLiteral("snapper")});
+            } else if (QFile::exists(QStringLiteral("/sbin/yast2"))) {
+                QProcess::startDetached(QStringLiteral("pkexec"),
+                    {QStringLiteral("/sbin/yast2"), QStringLiteral("snapper")});
+            } else if (QFile::exists(QStringLiteral("/usr/bin/snapper-gui"))) {
+                QProcess::startDetached(QStringLiteral("/usr/bin/snapper-gui"), {});
+            } else {
                 QProcess::startDetached(QStringLiteral("xdg-open"),
-                    {QStringLiteral("https://software.opensuse.org/search?q=snapper")});
+                    {QStringLiteral("https://doc.opensuse.org/documentation/leap/reference/"
+                                    "html/book-reference/cha-snapper.html")});
+            }
         }
 
         if (root->property("runRollbackRequested").toBool()) {

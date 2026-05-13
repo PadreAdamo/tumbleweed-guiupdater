@@ -72,16 +72,18 @@ Kirigami.ApplicationWindow {
     property var  vendorChanges:        []
 
     // ---- Read-only state set by C++ ----
-    property bool   snapperAvailable:    false
-    property bool   snapperGuiAvailable: false
-    property string appVersion:          ""
+    property bool   snapperAvailable:        false
+    property bool   snapperGuiAvailable:     false
+    property bool   yastAvailable:           false
+    property bool   anySnapperToolAvailable: false
+    property string appVersion:              ""
 
     // ---- Snapper rollback state ----
-    property bool   snapperUsed:       false
-    property int    snapshotPre:       -1
-    property int    snapshotPost:      -1
-    property bool   showSnapperBanner: false
-    property bool   runSnapperGuiRequested: false
+    property bool   snapperUsed:              false
+    property int    snapshotPre:              -1
+    property int    snapshotPost:             -1
+    property bool   showSnapperBanner:        false
+    property bool   openSnapperToolRequested: false
 
     // Rollback trigger and result
     property int    rollbackSnapshotNum:      -1
@@ -496,9 +498,10 @@ Kirigami.ApplicationWindow {
                               "If something went wrong, you can roll back."
                         actions: [
                             Kirigami.Action {
-                                text: root.snapperGuiAvailable ? "Open Snapper"
-                                                               : "Find Snapper Tools"
-                                onTriggered: root.runSnapperGuiRequested = true
+                                text: root.yastAvailable ? "Open Filesystem Snapshots"
+                                                         : "Open Snapper GUI"
+                                visible: root.anySnapperToolAvailable
+                                onTriggered: root.openSnapperToolRequested = true
                             },
                             Kirigami.Action {
                                 text: "How to Roll Back"
