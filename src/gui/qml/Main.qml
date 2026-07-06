@@ -51,6 +51,10 @@ Kirigami.ApplicationWindow {
     property bool   flatpakUpdatesAvailable: false
     property int    flatpakUpdateCount: 0
     property string flatpakList:    ""
+    property bool   fwupdAvailable: false
+    property bool   fwupdUpdatesAvailable: false
+    property int    fwupdUpdateCount: 0
+    property string fwupdList:      ""
     property string applyLog:       ""
 
     // ---- History ----
@@ -65,6 +69,8 @@ Kirigami.ApplicationWindow {
     property bool   settingsFlatpakEnabled:   false
     property string settingsVendorPolicy:     "priority"
     property bool   saveSettingsRequested:    false
+    property bool   fwupdEnabled:             true
+    property bool   saveFwupdEnabledRequested: false
 
     // ---- Vendor change state (populated by status/apply JSON result) ----
     property bool vendorChangeDetected: false
@@ -303,6 +309,42 @@ Kirigami.ApplicationWindow {
                         root.settingsFlatpakEnabled = checked
                         root.saveSettingsRequested = true
                     }
+                }
+
+                // ════════ Firmware Updates ════════
+                Kirigami.Separator {
+                    Kirigami.FormData.isSection: true
+                    Kirigami.FormData.label: "Firmware Updates"
+                    visible: root.fwupdAvailable
+                }
+
+                Controls.Switch {
+                    visible: root.fwupdAvailable
+                    Kirigami.FormData.label: "fwupd firmware updates:"
+                    checked: root.fwupdEnabled
+                    onCheckedChanged: {
+                        root.fwupdEnabled = checked
+                        root.saveFwupdEnabledRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    visible: root.fwupdAvailable
+                    Kirigami.FormData.label: " "
+                    text: "When enabled, firmware updates (via fwupdmgr) are applied\n" +
+                          "together with system updates when you click " +
+                          "\"Apply Updates (Admin)\".\n" +
+                          "Firmware updates always require a reboot to take effect."
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
+
+                Controls.Label {
+                    visible: !root.fwupdAvailable
+                    Kirigami.FormData.label: "Firmware Updates:"
+                    text: "fwupd is not installed on this system"
+                    opacity: 0.5
                 }
 
                 // ════════ Vendor Policy ════════
@@ -552,9 +594,12 @@ Kirigami.ApplicationWindow {
                                 total += root.packageList.split("\n").length
                             if (root.flatpakList.length > 0)
                                 total += root.flatpakList.split("\n").length
+                            if (root.fwupdList.length > 0)
+                                total += root.fwupdList.split("\n").length
                             return total > 0 ? "View " + total + " Packages" : "View Packages"
                         }
-                        enabled: root.packageList.length > 0 || root.flatpakList.length > 0
+                        enabled: root.packageList.length > 0 || root.flatpakList.length > 0 ||
+                                 root.fwupdList.length > 0
                         onClicked: packageDialog.open()
                     }
                 }
@@ -717,6 +762,11 @@ Kirigami.ApplicationWindow {
                         if (content.length > 0) content += "\n\n"
                         content += "── Flatpak Apps (" + fpCount + ") ──\n" + root.flatpakList
                     }
+                    if (root.fwupdList.length > 0) {
+                        var fwCount = root.fwupdList.split("\n").length
+                        if (content.length > 0) content += "\n\n"
+                        content += "── Firmware Updates (" + fwCount + ") ──\n" + root.fwupdList
+                    }
                     return content
                 }
                 readOnly: true
@@ -735,8 +785,9 @@ Kirigami.ApplicationWindow {
             padding: Kirigami.Units.largeSpacing
             wrapMode: Text.Wrap
             text: "A reboot is required to complete the update.\n\n" +
-                  "Kernel or core system libraries were updated and will not " +
-                  "take effect until the system is restarted."
+                  "Kernel or core system libraries were updated, or firmware " +
+                  "updates were applied, and will not take effect until the " +
+                  "system is restarted."
         }
 
         footer: Controls.DialogButtonBox {

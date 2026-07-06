@@ -25,6 +25,8 @@ Check for available updates using
 .BR zypper (8)
 and return a JSON object describing the current update state,
 including package count, vendor changes, Flatpak updates,
+firmware updates (via
+.BR fwupdmgr (1)),
 and whether a reboot will be required.
 .TP
 .B apply
@@ -32,7 +34,10 @@ Apply pending system updates using
 .BR "zypper dup" (8).
 Must be run as root via pkexec.
 Streams progress output followed by a final JSON result object.
-Optionally creates Snapper pre/post snapshots and updates Flatpak apps.
+Optionally creates Snapper pre/post snapshots, updates Flatpak apps,
+and applies firmware updates via
+.BR fwupdmgr (1).
+A reboot is always recommended when firmware updates were applied.
 .TP
 .B refresh
 Refresh repository metadata using
@@ -49,7 +54,7 @@ with the final JSON result on the last line.
 .I ~/.config/TumbleweedUpdaterrc
 User configuration file in KConfig INI format.
 Controls vendor policy, Snapper integration, Flatpak updates,
-and auto-check interval.
+fwupd firmware updates, and auto-check interval.
 .TP
 .I ~/.local/share/TumbleweedUpdater/history.log
 Update history log in JSONL format (one JSON object per line).
@@ -58,6 +63,7 @@ Update history log in JSONL format (one JSON object per line).
 .BR twu-ctl-notify (1),
 .BR zypper (8),
 .BR snapper (8),
+.BR fwupdmgr (1),
 .BR pkexec (1)
 .SH AUTHORS
 Adam Girardo

@@ -365,6 +365,23 @@ static bool read_flatpak_enabled()
     return read_kconfig_entry(kconf, "Flatpak", "Enabled", "false") == "true";
 }
 
+// ---- fwupd integration ----
+
+static bool read_fwupd_enabled()
+{
+    const std::string kconf = get_kconfig_path();
+    if (kconf.empty()) {
+        // Default: enabled if fwupdmgr exists
+        return std::filesystem::exists("/usr/bin/fwupdmgr");
+    }
+    const std::string val = read_kconfig_entry(kconf, "Fwupd", "Enabled", "");
+    if (val.empty()) {
+        // Key not set yet — default to true if installed
+        return std::filesystem::exists("/usr/bin/fwupdmgr");
+    }
+    return val == "true";
+}
+
 // ---- Vendor change policy ----
 
 struct VendorChange {
@@ -640,6 +657,113 @@ static int checkFlatpakUpdates(std::string &flatpakList)
     return static_cast<int>(apps.size());
 }
 
+struct FwupdDevice {
+    std::string name;
+    std::string currentVersion;
+    std::string newVersion;
+};
+
+static int checkFwupdUpdates(std::vector<FwupdDevice> &devices)
+{
+    devices.clear();
+
+    if (!std::filesystem::exists("/usr/bin/fwupdmgr"))
+        return 0;
+
+    std::string output;
+    // --no-unreported-check suppresses the reporting nag
+    // --no-metadata-check suppresses metadata age warnings
+    const int rc = run_command_capture(
+        "fwupdmgr get-updates --no-unreported-check "
+        "--no-metadata-check 2>&1", output);
+
+    // rc=2 means "no updates available" on some fwupd versions
+    // rc=0 means updates found
+    // anything else is an error
+    if (rc != 0 && rc != 2 &&
+        output.find("No updatable devices") == std::string::npos &&
+        output.find("No updates available") == std::string::npos) {
+        // Genuine error — return empty, don't fail the whole status check
+        std::cerr << "[twu-ctl] fwupd check failed (rc=" << rc << ")\n";
+        return 0;
+    }
+
+    // Definitive "nothing to do" markers — short-circuit before parsing.
+    // Without this, popen's non-TTY output can include a leading progress
+    // line (e.g. "Idle…") that would otherwise be misread as a device name.
+    if (output.find("No updatable devices") != std::string::npos ||
+        output.find("No updates available") != std::string::npos) {
+        return 0;
+    }
+
+    // Parse output for device update entries. fwupdmgr get-updates groups
+    // devices under section headers:
+    //   Devices with the following firmware updates available:
+    //     DeviceName (guid)
+    //       Current version: X.Y.Z
+    //       New version:     A.B.C
+    //       Summary:         ...
+    //   Devices with no available firmware updates:
+    //     • Some Device
+    //   Devices with the latest available firmware version:
+    //     • Some Device
+    // We only collect devices from the "available" section. This also
+    // ignores any preamble progress text (e.g. a plain "Idle…" line
+    // fwupdmgr prints when stdout isn't a TTY) that would otherwise be
+    // misread as a device name.
+    FwupdDevice current;
+    bool inAvailableSection = false;
+    std::istringstream stream(output);
+    std::string line;
+
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        if (line.find("Devices with") != std::string::npos) {
+            if (!current.name.empty()) {
+                devices.push_back(current);
+                current = FwupdDevice{};
+            }
+            inAvailableSection =
+                line.find("no available") == std::string::npos &&
+                line.find("latest available") == std::string::npos;
+            continue;
+        }
+
+        if (!inAvailableSection)
+            continue;
+
+        // Lines starting without leading whitespace begin a new device entry.
+        if (!line.empty() && line[0] != ' ' && line[0] != '\t') {
+            if (!current.name.empty()) {
+                devices.push_back(current);
+                current = FwupdDevice{};
+            }
+            // Strip trailing " (guid)" if present
+            size_t parenPos = line.rfind(" (");
+            current.name = parenPos != std::string::npos
+                ? line.substr(0, parenPos)
+                : line;
+            continue;
+        }
+
+        // Parse version lines
+        const std::string trimmed = trim_copy(line);
+        if (trimmed.rfind("Current version:", 0) == 0) {
+            current.currentVersion = trim_copy(trimmed.substr(16));
+        }
+        if (trimmed.rfind("New version:", 0) == 0) {
+            current.newVersion = trim_copy(trimmed.substr(12));
+        }
+    }
+
+    // Save last device
+    if (!current.name.empty())
+        devices.push_back(current);
+
+    return static_cast<int>(devices.size());
+}
+
 static int cmd_status()
 {
     const std::string timestamp    = iso8601_now_utc();
@@ -744,19 +868,51 @@ static int cmd_status()
     }
     const bool flatpakUpdatesAvailable = flatpakCount > 0;
 
-    const bool anyUpdatesAvailable = updatesAvailable || flatpakUpdatesAvailable;
-    const int  totalUpdateCount    = updateCount + flatpakCount;
+    // === Phase 3: fwupd firmware check ===
+    std::vector<FwupdDevice> fwupdDevices;
+    int fwupdCount = 0;
+    bool fwupdEnabled = read_fwupd_enabled();
 
-    if (flatpakUpdatesAvailable) {
-        if (updatesAvailable) {
-            summary = std::to_string(updateCount) + " system + " +
-                      std::to_string(flatpakCount) + " Flatpak update" +
-                      (flatpakCount == 1 ? "" : "s") + " available";
-        } else {
-            summary = std::to_string(flatpakCount) + " Flatpak update" +
-                      (flatpakCount == 1 ? "" : "s") + " available";
-            details = "Flatpak apps have updates available.";
+    if (fwupdEnabled && std::filesystem::exists("/usr/bin/fwupdmgr")) {
+        fwupdCount = checkFwupdUpdates(fwupdDevices);
+    }
+
+    const bool fwupdUpdatesAvailable = fwupdCount > 0;
+
+    std::string fwupdList;
+    for (size_t i = 0; i < fwupdDevices.size(); i++) {
+        if (i > 0) fwupdList += "\n";
+        fwupdList += fwupdDevices[i].name;
+        if (!fwupdDevices[i].currentVersion.empty() &&
+            !fwupdDevices[i].newVersion.empty()) {
+            fwupdList += " (" + fwupdDevices[i].currentVersion +
+                         " \xE2\x86\x92 " + fwupdDevices[i].newVersion + ")";
         }
+    }
+
+    const bool anyUpdatesAvailable = updatesAvailable || flatpakUpdatesAvailable || fwupdUpdatesAvailable;
+    const int  totalUpdateCount    = updateCount + flatpakCount + fwupdCount;
+
+    // Build the summary from whichever categories have updates. Handles all
+    // combinations of system/Flatpak/firmware updates cleanly.
+    if (flatpakUpdatesAvailable || fwupdUpdatesAvailable) {
+        std::vector<std::string> parts;
+        if (updatesAvailable)
+            parts.push_back(std::to_string(updateCount) + " system");
+        if (flatpakUpdatesAvailable)
+            parts.push_back(std::to_string(flatpakCount) + " Flatpak");
+        if (fwupdUpdatesAvailable)
+            parts.push_back(std::to_string(fwupdCount) + " firmware");
+
+        summary.clear();
+        for (size_t i = 0; i < parts.size(); ++i) {
+            if (i > 0) summary += " + ";
+            summary += parts[i];
+        }
+        summary += " update" + std::string(totalUpdateCount == 1 ? "" : "s") + " available";
+
+        if (!updatesAvailable)
+            details = "Updates are available outside of zypper.";
     }
 
     std::cout
@@ -777,6 +933,9 @@ static int cmd_status()
         << "\"flatpakUpdatesAvailable\":" << (flatpakUpdatesAvailable ? "true" : "false") << ","
         << "\"flatpakUpdateCount\":"   << flatpakCount << ","
         << "\"flatpakList\":\""        << json_escape(flatpakList) << "\","
+        << "\"fwupdUpdatesAvailable\":" << (fwupdUpdatesAvailable ? "true" : "false") << ","
+        << "\"fwupdUpdateCount\":"    << fwupdCount << ","
+        << "\"fwupdList\":\""         << json_escape(fwupdList) << "\","
         << "\"timestamp\":\""          << json_escape(timestamp) << "\""
         << "}\n";
 
@@ -889,7 +1048,7 @@ static int cmd_apply()
         "You must be root"
     });
 
-    const bool rebootRequired = ok && compute_apply_reboot_required(output);
+    bool rebootRequired = ok && compute_apply_reboot_required(output);
 
     // Parse any vendor changes that actually occurred during this update
     const std::vector<VendorChange> vendorChanges = parse_vendor_changes(output);
@@ -919,6 +1078,38 @@ static int cmd_apply()
         }
     }
 
+    // ---- Optional fwupd firmware update ----
+    // Bundled into the main apply flow (never a separate confirmation step)
+    // because firmware devices are enumerated and gated by the same
+    // [Fwupd] Enabled setting used for status detection.
+    bool fwupdApplied = false;
+    int  fwupdUpdateCount = 0;
+    if (ok && read_fwupd_enabled() && std::filesystem::exists("/usr/bin/fwupdmgr")) {
+        std::vector<FwupdDevice> fwupdDevicesApply;
+        fwupdUpdateCount = checkFwupdUpdates(fwupdDevicesApply);
+
+        if (fwupdUpdateCount > 0) {
+            std::cout << "\n--- Updating firmware ---\n";
+            std::cout.flush();
+
+            FILE *fwpipe = popen("fwupdmgr update --no-unreported-check 2>&1", "r");
+            if (fwpipe) {
+                std::array<char, 4096> fwbuf{};
+                while (fgets(fwbuf.data(), static_cast<int>(fwbuf.size()), fwpipe) != nullptr) {
+                    const std::string chunk = fwbuf.data();
+                    output += chunk;
+                    std::cout << chunk;
+                    std::cout.flush();
+                }
+                fwupdApplied = (pclose(fwpipe) == 0);
+            }
+
+            // Firmware updates always require a reboot to take effect.
+            if (fwupdApplied)
+                rebootRequired = true;
+        }
+    }
+
     std::string summary = ok         ? "Update complete"
                         : needsAuth  ? "Permission denied"
                                      : "Update failed";
@@ -945,6 +1136,8 @@ static int cmd_apply()
         << "\"snapperUsed\":"          << (snapperUsed ? "true" : "false") << ","
         << "\"flatpakApplied\":"       << (flatpakUpdated ? "true" : "false") << ","
         << "\"flatpakUpdateCount\":"   << flatpakUpdateCount << ","
+        << "\"fwupdApplied\":"        << (fwupdApplied ? "true" : "false") << ","
+        << "\"fwupdUpdateCount\":"    << fwupdUpdateCount << ","
         << "\"vendorPolicy\":\""       << json_escape(vendorPolicy) << "\","
         << "\"vendorChangeDetected\":" << (vendorChangeDetected ? "true" : "false") << ","
         << "\"vendorChangeCount\":"    << vendorChangeCount << ","

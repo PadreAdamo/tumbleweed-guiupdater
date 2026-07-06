@@ -25,6 +25,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QTextStream>
 
@@ -72,6 +73,10 @@ struct UiStatus {
     bool       flatpakUpdatesAvailable = false;
     int        flatpakUpdateCount      = 0;
     QString    flatpakList;
+    bool       fwupdUpdatesAvailable = false;
+    int        fwupdUpdateCount      = 0;
+    QString    fwupdList;
+    bool       fwupdApplied = false;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -115,6 +120,10 @@ static UiStatus parseStatusJson(const QString &out)
     s.flatpakUpdatesAvailable  = o["flatpakUpdatesAvailable"].toBool();
     s.flatpakUpdateCount       = o["flatpakUpdateCount"].toInt();
     s.flatpakList              = o["flatpakList"].toString();
+    s.fwupdUpdatesAvailable    = o["fwupdUpdatesAvailable"].toBool();
+    s.fwupdUpdateCount         = o["fwupdUpdateCount"].toInt();
+    s.fwupdList                = o["fwupdList"].toString();
+    s.fwupdApplied             = o["fwupdApplied"].toBool();
 
     if (!ok) {
         if (needsAuth) {
@@ -136,17 +145,21 @@ static UiStatus parseStatusJson(const QString &out)
         s.kind = "warn";
 
         const int fpCount  = s.flatpakUpdateCount;
-        const int sysCount = updateCount - fpCount;
+        const int fwCount  = s.fwupdUpdateCount;
+        const int sysCount = updateCount - fpCount - fwCount;
 
-        if (s.flatpakUpdatesAvailable && sysCount > 0) {
-            s.text = QString("⚠️ %1 system + %2 Flatpak update%3 available%4")
-                         .arg(sysCount).arg(fpCount)
-                         .arg(fpCount == 1 ? "" : "s")
-                         .arg(suffix);
-        } else if (s.flatpakUpdatesAvailable && sysCount <= 0) {
-            s.text = QString("⚠️ %1 Flatpak update%2 available%3")
-                         .arg(fpCount)
-                         .arg(fpCount == 1 ? "" : "s")
+        if (s.flatpakUpdatesAvailable || s.fwupdUpdatesAvailable) {
+            QStringList parts;
+            if (sysCount > 0)
+                parts << QString("%1 system").arg(sysCount);
+            if (s.flatpakUpdatesAvailable)
+                parts << QString("%1 Flatpak").arg(fpCount);
+            if (s.fwupdUpdatesAvailable)
+                parts << QString("%1 firmware").arg(fwCount);
+
+            s.text = QString("⚠️ %1 update%2 available%3")
+                         .arg(parts.join(" + "))
+                         .arg(updateCount == 1 ? "" : "s")
                          .arg(suffix);
         } else if (updateCount > 0) {
             s.text = QString("⚠️ %1 updates available%2").arg(updateCount).arg(suffix);
@@ -253,6 +266,10 @@ int main(int argc, char *argv[])
     KConfigGroup flatpakGrp  = cfg->group(QStringLiteral("Flatpak"));
     bool flatpakEnabled = flatpakGrp.readEntry("Enabled", false);
 
+    const bool fwupdAvailable = QFileInfo::exists(QStringLiteral("/usr/bin/fwupdmgr"));
+    KConfigGroup fwupdGrp = cfg->group(QStringLiteral("Fwupd"));
+    bool fwupdEnabled = fwupdGrp.readEntry("Enabled", fwupdAvailable);
+
     KConfigGroup vendorPolicyGrp = cfg->group(QStringLiteral("VendorPolicy"));
     QString vendorPolicyMode = vendorPolicyGrp.readEntry("Mode", QStringLiteral("priority"));
 
@@ -272,6 +289,8 @@ int main(int argc, char *argv[])
     setProp(root, "yastAvailable",             yastAvailable && kdesuAvailable);
     setProp(root, "anySnapperToolAvailable",   anySnapperToolAvailable);
     setProp(root, "appVersion",                QStringLiteral(APP_VERSION));
+    setProp(root, "fwupdAvailable",            fwupdAvailable);
+    setProp(root, "fwupdEnabled",              fwupdEnabled);
 
     // Reflect the actual systemd timer state in the UI, then offer first-launch enable.
     {
@@ -514,6 +533,11 @@ int main(int argc, char *argv[])
                 st.text += QString("\n⚠️ %1 package(s) changed vendor during this update")
                                .arg(st.vendorChangeCount);
 
+            if (applyInProgress && st.fwupdApplied)
+                st.text += QString("\n🔧 %1 firmware update%2 applied")
+                               .arg(st.fwupdUpdateCount)
+                               .arg(st.fwupdUpdateCount == 1 ? "" : "s");
+
             // Convert vendorChanges QJsonArray to QVariantList so QML can iterate it
             QVariantList vcList;
             for (const QJsonValue &item : st.vendorChanges) {
@@ -535,6 +559,9 @@ int main(int argc, char *argv[])
             setProp(root, "flatpakUpdatesAvailable",  st.flatpakUpdatesAvailable);
             setProp(root, "flatpakUpdateCount",       st.flatpakUpdateCount);
             setProp(root, "flatpakList",              st.flatpakList);
+            setProp(root, "fwupdUpdatesAvailable",    st.fwupdUpdatesAvailable);
+            setProp(root, "fwupdUpdateCount",         st.fwupdUpdateCount);
+            setProp(root, "fwupdList",                st.fwupdList);
             setProp(root, "busy", false);
 
             // Expose snapshot numbers to QML and show the rollback banner.
@@ -688,6 +715,16 @@ int main(int argc, char *argv[])
                     {QStringLiteral("--user"), QStringLiteral("restart"),
                      QStringLiteral("tumbleweed-updater-check.timer")});
             }
+        }
+
+        if (root->property("saveFwupdEnabledRequested").toBool()) {
+            root->setProperty("saveFwupdEnabledRequested", false);
+
+            fwupdEnabled = root->property("fwupdEnabled").toBool();
+
+            auto wcfg = KSharedConfig::openConfig();
+            wcfg->group(QStringLiteral("Fwupd")).writeEntry("Enabled", fwupdEnabled);
+            wcfg->sync();
         }
 
         if (root->property("loadHistoryRequested").toBool()) {
