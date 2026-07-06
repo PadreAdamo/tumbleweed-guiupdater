@@ -26,6 +26,7 @@
       <li>Reboot detection after kernel and core library updates</li>
       <li>Snapper pre/post snapshot integration for safe rollback</li>
       <li>Optional Flatpak update support</li>
+      <li>Optional firmware update detection and application via fwupd</li>
       <li>Persistent update history log with rollback actions</li>
       <li>KDE-native settings page</li>
       <li>Vendor change detection and policy control</li>
@@ -58,6 +59,36 @@
   </screenshots>
 
   <releases>
+    <release version="0.1.4" date="2026-07-06">
+      <description>
+        <p>Firmware update support.</p>
+        <ul>
+          <li>Firmware update detection via fwupdmgr, alongside zypper and Flatpak</li>
+          <li>Firmware updates applied together with system updates, always
+            marking a reboot as required</li>
+          <li>Settings toggle to enable or disable firmware update checks</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.3" date="2026-05-11">
+      <description>
+        <p>Flatpak support and background checks.</p>
+        <ul>
+          <li>Optional Flatpak update detection and apply</li>
+          <li>Systemd user timer for automatic background update checks</li>
+          <li>Man pages for tumbleweed-updater, twu-ctl, and twu-ctl-notify</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.2" date="2026-05-10">
+      <description>
+        <p>Bug fixes.</p>
+        <ul>
+          <li>Fix stale repository cache before status checks</li>
+          <li>Fix history log path and reload behavior</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-05-07">
       <description>
         <p>Initial release.</p>

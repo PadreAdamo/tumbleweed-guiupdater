@@ -4,7 +4,7 @@
 # On OBS, use <scm> or upload a tarball with that name.
 
 Name:           tumbleweed-updater
-Version:        0.1.3
+Version:        0.1.4
 Release:        0
 Summary:        KDE-native GUI system updater for openSUSE Tumbleweed
 License:        GPL-2.0-only
@@ -41,6 +41,9 @@ Requires:       kf6-kconfig
 Recommends:     snapper
 # flatpak updates are off by default and require the flatpak CLI at runtime
 Suggests:       flatpak
+# fwupd is optional; firmware update detection/apply is enabled by default
+# when fwupdmgr is present and silently skipped if it is absent
+Recommends:     fwupd
 
 %description
 Tumbleweed Updater is a KDE Plasma system tray application that keeps your
@@ -90,6 +93,17 @@ appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.a
 %{_datadir}/metainfo/org.padreadamo.tumbleweedupdater.appdata.xml
 
 %changelog
+* Mon Jul 06 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.4-0
+- Add fwupd firmware update detection: cmd_status() checks fwupdmgr for
+  pending firmware updates alongside zypper and Flatpak, gated by a
+  [Fwupd] Enabled setting (default on if fwupdmgr is installed)
+- Bundle firmware apply into the existing Apply Updates flow — applied
+  together with zypper/Flatpak updates rather than a separate button,
+  and always marks a reboot as required
+- Add Settings toggle for fwupd firmware updates, hidden entirely when
+  fwupdmgr is not installed
+- Add Recommends: fwupd to the RPM spec
+
 * Sun May 11 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.3-0
 - Add Flatpak update detection: cmd_status() checks for Flatpak updates and
   reports them separately in the status JSON and GUI status text

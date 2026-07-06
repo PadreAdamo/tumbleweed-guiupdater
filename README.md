@@ -18,9 +18,10 @@ Tumbleweed GUI Updater keeps your rolling-release system current without requiri
 - **Reboot detection** after kernel, glibc, or systemd updates, using a three-method cascade: `/run/reboot-required`, zypper output keywords, and a live `uname -r` vs installed kernel comparison
 - **Snapper pre/post snapshots** bracketing every `zypper dup` run — snapshot numbers are shown in the status view so you always know your rollback point
 - **Optional Flatpak updates** run after `zypper dup` with output streamed to the same live log
+- **Optional firmware updates** via `fwupdmgr` — detected alongside zypper and Flatpak updates and applied together with them from the same Apply Updates action; always marks a reboot as required
 - **Persistent update history** — every check and apply is appended to a JSONL log at `~/.local/share/TumbleweedUpdater/history.log`, browsable in the History tab
 - **Vendor change policy** — four modes control how `zypper dup` handles packages that would switch repositories or vendors; a pre-apply warning dialog lists affected packages so you always know what is changing before it happens
-- **KDE-native settings page** built with Kirigami FormLayout — auto-check interval, Snapper toggle, Flatpak toggle, vendor policy, all persisted via KConfig
+- **KDE-native settings page** built with Kirigami FormLayout — auto-check interval, Snapper toggle, Flatpak toggle, fwupd toggle, vendor policy, all persisted via KConfig
 - **Privilege separation** — the GUI never runs as root; `zypper dup` and `systemctl reboot` are invoked via `pkexec`
 
 ---
@@ -44,7 +45,9 @@ If a requested feature resembles a package manager, it is out of scope. See [PRO
 
 ## Screenshots
 
-<!-- Screenshots coming soon — add before submission to OBS/KDE review -->
+| Main window | History | Settings |
+|---|---|---|
+| ![Main window showing available updates](docs/screenshots/main.png) | ![Update history log with rollback actions](docs/screenshots/history.png) | ![Settings page](docs/screenshots/settings.png) |
 
 ---
 
@@ -57,7 +60,7 @@ If a requested feature resembles a package manager, it is out of scope. See [PRO
 | Build tools | `cmake >= 3.22`, `extra-cmake-modules` |
 | Qt 6 | `qt6-base-devel`, `qt6-declarative-devel`, `qt6-quickcontrols2-devel` |
 | KDE Frameworks 6 | `kf6-kirigami-devel`, `kf6-knotifications-devel`, `kf6-kstatusnotifieritem-devel`, `kf6-kconfig-devel` |
-| Optional | `snapper` (for snapshot integration), `flatpak` (for Flatpak update support) |
+| Optional | `snapper` (for snapshot integration), `flatpak` (for Flatpak update support), `fwupd` (for firmware update support) |
 
 Install build dependencies on openSUSE Tumbleweed:
 
@@ -99,6 +102,7 @@ The app starts minimised to the system tray. Left-click the tray icon to show or
 - `twu-ctl` must be installed to `/usr/bin/twu-ctl` — the GUI looks for it there.
 - Snapper integration requires Snapper to be installed and a `root` configuration to exist (`snapper list` should work without errors). If Snapper is absent the update proceeds normally; snapshots are silently skipped.
 - Flatpak support requires `/usr/bin/flatpak` to be present and is off by default. Enable it in Settings.
+- Firmware update support requires `/usr/bin/fwupdmgr` to be present, and is on by default when it is. If `fwupdmgr` is absent, the firmware UI is hidden entirely and no fwupd calls are made.
 
 ---
 
@@ -116,6 +120,9 @@ Enabled=true
 
 [Flatpak]
 Enabled=false
+
+[Fwupd]
+Enabled=true
 
 [VendorPolicy]
 Mode=priority
