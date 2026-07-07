@@ -104,7 +104,7 @@ appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.a
   fwupdmgr is not installed
 - Add Recommends: fwupd to the RPM spec
 
-* Sun May 11 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.3-0
+* Mon May 11 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.3-0
 - Add Flatpak update detection: cmd_status() checks for Flatpak updates and
   reports them separately in the status JSON and GUI status text
 - Fix Flatpak detection: trim_copy now strips newlines from fgets output
@@ -122,7 +122,7 @@ appstream-util validate-relax --nonet appdata/org.padreadamo.tumbleweedupdater.a
 - Add AppStream metadata (org.padreadamo.tumbleweedupdater.appdata.xml)
 - Remove debug logging from GUI auto-check timer callback
 
-* Sat May 10 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.2-0
+* Sun May 10 2026 Adam Girardo <adamjohngirardo@gmail.com> - 0.1.2-0
 - Fix stale repo cache: run zypper ref via pkexec before status checks
 - Fix history log path mismatch (doubled org/app name in XDG path)
 - Reload History tab when returning from Settings page
