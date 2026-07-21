@@ -61,6 +61,17 @@ static int json_int(const std::string &json, const std::string &key)
     return result;
 }
 
+static std::string json_string(const std::string &json, const std::string &key)
+{
+    const std::string search = "\"" + key + "\":\"";
+    const size_t pos = json.find(search);
+    if (pos == std::string::npos) return "";
+    const size_t v = pos + search.size();
+    const size_t end = json.find('"', v);
+    if (end == std::string::npos) return "";
+    return json.substr(v, end - v);
+}
+
 static std::string data_dir()
 {
     const std::string home = get_home();
@@ -86,6 +97,30 @@ static void write_last_notified_count(int count)
     std::filesystem::create_directories(dir, ec);
     std::ofstream f(dir + "/last-notified-count");
     if (f) f << count << "\n";
+}
+
+// Shared with twu-ctl's cmd_status(), which writes the same file with
+// source="gui" for GUI-initiated checks. Whichever of the two ran most
+// recently wins, so the GUI can show an accurate "last checked" time
+// regardless of whether it or the systemd timer performed the check.
+static void write_last_check_state(const std::string &timestamp,
+                                    bool updatesAvailable,
+                                    int updateCount)
+{
+    const std::string dir = data_dir();
+    if (dir.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    std::ofstream f(dir + "/last-check-state.json", std::ios::trunc);
+    if (!f.is_open()) return;
+
+    f << "{"
+      << "\"timestamp\":\"" << timestamp << "\","
+      << "\"updatesAvailable\":" << (updatesAvailable ? "true" : "false") << ","
+      << "\"updateCount\":" << updateCount << ","
+      << "\"source\":\"systemd-timer\""
+      << "}\n";
 }
 
 int main(int argc, char *argv[])
@@ -116,6 +151,10 @@ int main(int argc, char *argv[])
                 "  ~/.local/share/TumbleweedUpdater/last-notified-count\n"
                 "             Stores the last notified update count to\n"
                 "             prevent duplicate notifications.\n"
+                "  ~/.local/share/TumbleweedUpdater/last-check-state.json\n"
+                "             Shared with twu-ctl status; lets the GUI show\n"
+                "             an accurate last-checked time for background\n"
+                "             checks it didn't itself perform.\n"
                 "\n"
                 "See also: twu-ctl(1), tumbleweed-updater(1)\n";
             return 0;
@@ -140,6 +179,9 @@ int main(int argc, char *argv[])
     const bool updatesAvailable = json_bool(json, "updatesAvailable");
     const int  totalCount       = json_int(json, "updateCount");
     const int  flatpakCount     = json_int(json, "flatpakUpdateCount");
+    const std::string timestamp = json_string(json, "timestamp");
+
+    write_last_check_state(timestamp, updatesAvailable, totalCount);
 
     if (!updatesAvailable) {
         write_last_notified_count(0);

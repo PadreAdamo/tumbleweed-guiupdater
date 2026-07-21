@@ -17,6 +17,7 @@
 #include <QMenu>
 #include <QAction>
 #include <QIcon>
+#include <QFileSystemWatcher>
 
 #include <KStatusNotifierItem>
 #include <KNotification>
@@ -30,6 +31,8 @@
 #include <QTextStream>
 
 #include <cstdio>
+#include <pwd.h>
+#include <unistd.h>
 
 static bool isOnBattery()
 {
@@ -46,6 +49,23 @@ static QString findTwuCtl()
     return QStringLiteral("/usr/bin/twu-ctl");
 }
 
+static QString currentUsername()
+{
+    const struct passwd *pw = getpwuid(getuid());
+    return (pw && pw->pw_name) ? QString::fromLocal8Bit(pw->pw_name) : QString();
+}
+
+// Must match unattended_marker_path() in src/controller/main.cpp.
+// The real polkit rule lives under /etc/polkit-1/rules.d, which is mode
+// 0750 root:polkitd on openSUSE — an unprivileged process can't even stat
+// inside it. This marker lives in a world-traversable directory instead,
+// purely so the GUI can reflect real on/off state without needing root.
+static QString unattendedMarkerPath()
+{
+    return QStringLiteral("/var/lib/tumbleweed-updater/unattended-%1.enabled")
+        .arg(currentUsername());
+}
+
 static QString prettyTimestamp(const QString &isoUtc)
 {
     QDateTime dt = QDateTime::fromString(isoUtc, Qt::ISODate);
@@ -54,6 +74,28 @@ static QString prettyTimestamp(const QString &isoUtc)
 
     dt = dt.toTimeZone(QTimeZone::UTC);
     return dt.toLocalTime().toString("MMM d, h:mm AP");
+}
+
+// Written by both twu-ctl's cmd_status() (source="gui") and twu-ctl-notify
+// (source="systemd-timer") after every successful check, so the GUI can
+// show an accurate "last checked" time regardless of who performed it.
+static QString lastCheckStatePath()
+{
+    return QDir::homePath() +
+        QStringLiteral("/.local/share/TumbleweedUpdater/last-check-state.json");
+}
+
+static QJsonObject readLastCheckState()
+{
+    QFile f(lastCheckStatePath());
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return {};
+    return doc.object();
 }
 
 struct UiStatus {
@@ -266,6 +308,9 @@ int main(int argc, char *argv[])
     KConfigGroup flatpakGrp  = cfg->group(QStringLiteral("Flatpak"));
     bool flatpakEnabled = flatpakGrp.readEntry("Enabled", false);
 
+    KConfigGroup autoApplyGrp = cfg->group(QStringLiteral("AutoApply"));
+    bool autoApplyEnabled = autoApplyGrp.readEntry("Enabled", false);
+
     const bool fwupdAvailable = QFileInfo::exists(QStringLiteral("/usr/bin/fwupdmgr"));
     KConfigGroup fwupdGrp = cfg->group(QStringLiteral("Fwupd"));
     bool fwupdEnabled = fwupdGrp.readEntry("Enabled", fwupdAvailable);
@@ -283,6 +328,10 @@ int main(int argc, char *argv[])
     setProp(root, "settingsIntervalHours",     intervalHours);
     setProp(root, "settingsSnapperEnabled",    snapperEnabled);
     setProp(root, "settingsFlatpakEnabled",    flatpakEnabled);
+    setProp(root, "settingsAutoApplyEnabled",  autoApplyEnabled);
+
+    const QString unattendedMarkerPathValue = unattendedMarkerPath();
+    setProp(root, "settingsUnattendedEnabled", QFile::exists(unattendedMarkerPathValue));
     setProp(root, "settingsVendorPolicy",      vendorPolicyMode);
     setProp(root, "snapperAvailable",          snapperAvailable);
     setProp(root, "snapperGuiAvailable",       snapperGuiAvailable);
@@ -291,6 +340,37 @@ int main(int argc, char *argv[])
     setProp(root, "appVersion",                QStringLiteral(APP_VERSION));
     setProp(root, "fwupdAvailable",            fwupdAvailable);
     setProp(root, "fwupdEnabled",              fwupdEnabled);
+
+    // Reflect whichever check (this GUI or the background systemd timer) ran
+    // most recently, so the status label never shows a stale in-app timestamp.
+    {
+        const QJsonObject lastCheck = readLastCheckState();
+        const QString ts = prettyTimestamp(lastCheck["timestamp"].toString());
+        if (!lastCheck.isEmpty() && !ts.isEmpty()) {
+            const bool hadUpdates = lastCheck["updatesAvailable"].toBool();
+            const int count = lastCheck["updateCount"].toInt();
+            const QString source = lastCheck["source"].toString();
+
+            QString statusText;
+            if (hadUpdates) {
+                statusText = QString("⚠️ %1 update%2 available • %3")
+                    .arg(count)
+                    .arg(count == 1 ? "" : "s")
+                    .arg(ts);
+            } else {
+                statusText = QString("✅ Up to date • %1").arg(ts);
+            }
+            if (source == QStringLiteral("systemd-timer"))
+                statusText += QStringLiteral("\n(last checked by background timer)");
+
+            setProp(root, "statusText", statusText);
+            setProp(root, "statusKind", hadUpdates ? "warn" : "ok");
+            setProp(root, "updatesAvailable", hadUpdates);
+
+            if (source == QStringLiteral("systemd-timer"))
+                setProp(root, "lastBackgroundCheckTime", ts);
+        }
+    }
 
     // Reflect the actual systemd timer state in the UI, then offer first-launch enable.
     {
@@ -420,10 +500,18 @@ int main(int argc, char *argv[])
     KStatusNotifierItem *tray = nullptr;
     bool lastUpdatesAvailable = false;
 
+    // Watches the shared last-check-state.json so a background-timer check
+    // (which this process didn't run) still refreshes the displayed status.
+    const QString stateFilePath = lastCheckStatePath();
+    auto *stateWatcher = new QFileSystemWatcher(&app);
+    if (QFileInfo::exists(stateFilePath))
+        stateWatcher->addPath(stateFilePath);
+
     QProcess proc;
-    bool applyInProgress    = false;
-    bool refreshInProgress  = false;
-    bool rollbackInProgress = false;
+    bool applyInProgress             = false;
+    bool refreshInProgress           = false;
+    bool rollbackInProgress          = false;
+    bool unattendedToggleInProgress  = false;
     QString stdoutAccum;
 
     // Helper: show/raise the main window
@@ -431,6 +519,44 @@ int main(int argc, char *argv[])
         window->show();
         window->raise();
         window->requestActivate();
+    };
+
+    // Launch the privileged apply step. Shared by the manual "Apply Updates"
+    // button and the automatic auto-apply path, so both keep the tray/log/busy
+    // state in sync the same way.
+    auto startApply = [&](bool autoTriggered) {
+        if (proc.state() != QProcess::NotRunning) {
+            if (!autoTriggered) {
+                setProp(root, "statusKind", "warn");
+                setProp(root, "statusText", "Busy…");
+            }
+            return;
+        }
+
+        applyInProgress = true;
+        stdoutAccum.clear();
+        setProp(root, "applyLog", QString());
+        setProp(root, "rebootRequired", false);
+        setProp(root, "busy", true);
+        setProp(root, "statusText",
+                autoTriggered ? "Auto-applying updates…" : "Applying updates (admin)…");
+        setProp(root, "statusKind", "warn");
+
+        if (tray) {
+            tray->setIconByName(QStringLiteral("tumbleweed-updater"));
+            tray->setToolTipTitle(QStringLiteral("Applying updates…"));
+            tray->setStatus(KStatusNotifierItem::Active);
+        }
+
+        proc.start("pkexec", {findTwuCtl(), "apply"});
+        if (!proc.waitForStarted(1000)) {
+            setProp(root, "statusKind", "error");
+            setProp(root, "statusText", "❌ Error: could not start apply");
+            setProp(root, "busy", false);
+            applyInProgress = false;
+        } else {
+            autoCheckTimer.start(intervalMs);
+        }
     };
 
     // During apply, stream each chunk into the QML log as it arrives.
@@ -444,6 +570,10 @@ int main(int argc, char *argv[])
 
     QObject::connect(&proc, &QProcess::finished, &app,
         [&](int exitCode, QProcess::ExitStatus exitStatus) {
+            // Captured before any of the branches below reset it, so we can
+            // tell whether this finish is a status check or an apply run.
+            const bool isApplyResult = applyInProgress;
+
             // Drain any data that arrived after the last readyReadStandardOutput
             stdoutAccum += QString::fromUtf8(proc.readAllStandardOutput());
             const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
@@ -473,6 +603,19 @@ int main(int argc, char *argv[])
                         out.isEmpty() ? err : out + (err.isEmpty() ? "" : "\n" + err));
                 setProp(root, "showRollbackResultDialog", true);
                 setProp(root, "busy",                     false);
+                return;
+            }
+
+            // Unattended-mode toggle complete — re-check the rule file itself
+            // (rather than trusting the exit code) so the switch always
+            // reflects what's actually on disk.
+            if (unattendedToggleInProgress) {
+                unattendedToggleInProgress = false;
+                const bool ok = (exitStatus == QProcess::NormalExit && exitCode == 0);
+                setProp(root, "settingsUnattendedEnabled",
+                        QFile::exists(unattendedMarkerPathValue));
+                setProp(root, "unattendedToggleFailed", !ok);
+                setProp(root, "busy", false);
                 return;
             }
 
@@ -598,6 +741,23 @@ int main(int argc, char *argv[])
                 notif->sendEvent();
             }
             lastUpdatesAvailable = st.updatesAvailable;
+
+            // The state file may not have existed at startup (first run, or
+            // this GUI process's own check just created it) — pick it up now
+            // so future background-timer writes are still observed live.
+            if (QFileInfo::exists(stateFilePath) &&
+                !stateWatcher->files().contains(stateFilePath)) {
+                stateWatcher->addPath(stateFilePath);
+            }
+
+            // Auto-apply: if enabled, immediately apply updates found by a
+            // status check (never re-triggered from an apply's own finish).
+            // Intentionally bypasses the vendor-change confirmation dialog,
+            // since this path is meant to run fully unattended.
+            if (!isApplyResult && st.updatesAvailable &&
+                root->property("settingsAutoApplyEnabled").toBool()) {
+                startApply(true);
+            }
         });
 
     QTimer poll;
@@ -640,32 +800,42 @@ int main(int argc, char *argv[])
 
         if (root->property("runApplyRequested").toBool()) {
             root->setProperty("runApplyRequested", false);
+            startApply(false);
+        }
 
-            if (proc.state() != QProcess::NotRunning) {
-                setProp(root, "statusKind", "warn");
-                setProp(root, "statusText", "Busy…");
-                return;
+        if (root->property("enableUnattendedRequested").toBool()) {
+            root->setProperty("enableUnattendedRequested", false);
+            if (proc.state() == QProcess::NotRunning) {
+                unattendedToggleInProgress = true;
+                stdoutAccum.clear();
+                setProp(root, "unattendedToggleFailed", false);
+                setProp(root, "busy", true);
+                proc.start("pkexec", {findTwuCtl(), "enable-unattended"});
+                if (!proc.waitForStarted(1000)) {
+                    unattendedToggleInProgress = false;
+                    setProp(root, "unattendedToggleFailed", true);
+                    setProp(root, "settingsUnattendedEnabled",
+                            QFile::exists(unattendedMarkerPathValue));
+                    setProp(root, "busy", false);
+                }
             }
+        }
 
-            applyInProgress = true;
-            stdoutAccum.clear();
-            setProp(root, "applyLog", QString());
-            setProp(root, "rebootRequired", false);
-
-            if (tray) {
-                tray->setIconByName(QStringLiteral("tumbleweed-updater"));
-                tray->setToolTipTitle(QStringLiteral("Applying updates…"));
-                tray->setStatus(KStatusNotifierItem::Active);
-            }
-
-            proc.start("pkexec", {findTwuCtl(), "apply"});
-            if (!proc.waitForStarted(1000)) {
-                setProp(root, "statusKind", "error");
-                setProp(root, "statusText", "❌ Error: could not start apply");
-                setProp(root, "busy", false);
-                applyInProgress = false;
-            } else {
-                autoCheckTimer.start(intervalMs);
+        if (root->property("disableUnattendedRequested").toBool()) {
+            root->setProperty("disableUnattendedRequested", false);
+            if (proc.state() == QProcess::NotRunning) {
+                unattendedToggleInProgress = true;
+                stdoutAccum.clear();
+                setProp(root, "unattendedToggleFailed", false);
+                setProp(root, "busy", true);
+                proc.start("pkexec", {findTwuCtl(), "disable-unattended"});
+                if (!proc.waitForStarted(1000)) {
+                    unattendedToggleInProgress = false;
+                    setProp(root, "unattendedToggleFailed", true);
+                    setProp(root, "settingsUnattendedEnabled",
+                            QFile::exists(unattendedMarkerPathValue));
+                    setProp(root, "busy", false);
+                }
             }
         }
 
@@ -683,6 +853,7 @@ int main(int argc, char *argv[])
             snapperEnabled   = root->property("settingsSnapperEnabled").toBool();
             flatpakEnabled   = root->property("settingsFlatpakEnabled").toBool();
             vendorPolicyMode = root->property("settingsVendorPolicy").toString();
+            autoApplyEnabled = root->property("settingsAutoApplyEnabled").toBool();
 
             auto wcfg = KSharedConfig::openConfig();
             wcfg->group(QStringLiteral("AutoCheck")).writeEntry("Enabled",       autoCheckEnabled);
@@ -690,6 +861,7 @@ int main(int argc, char *argv[])
             wcfg->group(QStringLiteral("Snapper")).writeEntry("Enabled",         snapperEnabled);
             wcfg->group(QStringLiteral("Flatpak")).writeEntry("Enabled",         flatpakEnabled);
             wcfg->group(QStringLiteral("VendorPolicy")).writeEntry("Mode",       vendorPolicyMode);
+            wcfg->group(QStringLiteral("AutoApply")).writeEntry("Enabled",       autoApplyEnabled);
             wcfg->sync();
 
             if (autoCheckEnabled)
@@ -919,6 +1091,67 @@ int main(int argc, char *argv[])
 
     if (autoCheckEnabled)
         autoCheckTimer.start(intervalMs);
+
+    QObject::connect(stateWatcher, &QFileSystemWatcher::fileChanged, &app,
+        [&](const QString &path) {
+            // Some writers replace the file (write-then-rename), which drops
+            // it from the watch list — re-add so future writes are still seen.
+            if (!stateWatcher->files().contains(path) && QFileInfo::exists(path))
+                stateWatcher->addPath(path);
+
+            const QJsonObject state = readLastCheckState();
+            if (state.isEmpty() ||
+                state["source"].toString() != QStringLiteral("systemd-timer"))
+                return;
+
+            const QString ts = prettyTimestamp(state["timestamp"].toString());
+            if (ts.isEmpty())
+                return;
+
+            setProp(root, "lastBackgroundCheckTime", ts);
+
+            // Don't clobber an in-progress GUI-initiated check's display.
+            if (root->property("busy").toBool())
+                return;
+
+            const bool hadUpdates = state["updatesAvailable"].toBool();
+            const int count = state["updateCount"].toInt();
+
+            QString statusText;
+            if (hadUpdates) {
+                statusText = QString("⚠️ %1 update%2 available • %3\n"
+                                      "(detected by background timer)")
+                    .arg(count)
+                    .arg(count == 1 ? "" : "s")
+                    .arg(ts);
+            } else {
+                statusText = QString("✅ Up to date • %1\n"
+                                      "(last checked by background timer)").arg(ts);
+            }
+
+            setProp(root, "statusText", statusText);
+            setProp(root, "statusKind", hadUpdates ? "warn" : "ok");
+            setProp(root, "updatesAvailable", hadUpdates);
+
+            UiStatus st;
+            st.kind = hadUpdates ? "warn" : "ok";
+            st.updatesAvailable = hadUpdates;
+            if (tray)
+                updateTray(tray, st);
+
+            if (hadUpdates && !lastUpdatesAvailable) {
+                auto *notif = new KNotification(
+                    QStringLiteral("updateAvailable"),
+                    KNotification::CloseOnTimeout,
+                    &app
+                );
+                notif->setTitle(QStringLiteral("Updates Available"));
+                notif->setText(QStringLiteral("Your system has updates ready to install."));
+                notif->setIconName(QStringLiteral("update-low"));
+                notif->sendEvent();
+            }
+            lastUpdatesAvailable = hadUpdates;
+        });
 
     poll.start();
     return app.exec();

@@ -30,6 +30,7 @@ Kirigami.ApplicationWindow {
     property bool   timerEnabled:             false
     property bool   setTimerEnabledRequested: false
     property string nextCheckTime:            ""
+    property string lastBackgroundCheckTime:  "Never"
     property bool   timerOfferReady:          false
     Timer {
         interval: 1200
@@ -68,7 +69,12 @@ Kirigami.ApplicationWindow {
     property bool   settingsSnapperEnabled:   true
     property bool   settingsFlatpakEnabled:   false
     property string settingsVendorPolicy:     "priority"
+    property bool   settingsAutoApplyEnabled: false
     property bool   saveSettingsRequested:    false
+    property bool   settingsUnattendedEnabled:    false
+    property bool   enableUnattendedRequested:    false
+    property bool   disableUnattendedRequested:   false
+    property bool   unattendedToggleFailed:       false
     property bool   fwupdEnabled:             true
     property bool   saveFwupdEnabledRequested: false
 
@@ -254,6 +260,14 @@ Kirigami.ApplicationWindow {
 
                 Controls.Label {
                     Kirigami.FormData.label: " "
+                    visible: root.timerEnabled
+                    text: "Last background check: " + root.lastBackgroundCheckTime
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
                     visible: root.timerEnabled && root.nextCheckTime.length > 0
                     text: "Next check: " + root.nextCheckTime
                     opacity: 0.7
@@ -309,6 +323,62 @@ Kirigami.ApplicationWindow {
                         root.settingsFlatpakEnabled = checked
                         root.saveSettingsRequested = true
                     }
+                }
+
+                Controls.Switch {
+                    Kirigami.FormData.label: "Auto Apply Updates"
+                    checked: root.settingsAutoApplyEnabled
+                    onToggled: {
+                        root.settingsAutoApplyEnabled = checked
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: "Automatically apply updates as soon as they're found, with no\n" +
+                          "confirmation prompt. Administrator authentication is still required."
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
+
+                Controls.Switch {
+                    id: unattendedSwitch
+                    Kirigami.FormData.label: "Unattended Updates"
+                    enabled: root.settingsAutoApplyEnabled && !root.busy
+                    checked: root.settingsUnattendedEnabled
+                    onToggled: {
+                        // Optimistic UI update; corrected from the actual rule
+                        // file's state once the privileged toggle completes.
+                        root.settingsUnattendedEnabled = checked
+                        if (checked)
+                            root.enableUnattendedRequested = true
+                        else
+                            root.disableUnattendedRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: root.settingsAutoApplyEnabled
+                        ? "Installs a polkit rule scoped to your user account only, so " +
+                          "scheduled\nauto-apply can run without a password prompt each time. " +
+                          "Requires\none-time administrator authentication now to install " +
+                          "or remove it."
+                        : "Enable \"Auto Apply Updates\" above first."
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    visible: root.unattendedToggleFailed
+                    text: "⚠️ Could not change unattended mode (authentication cancelled or failed)."
+                    color: Kirigami.Theme.negativeTextColor
+                    wrapMode: Text.Wrap
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
 
                 // ════════ Firmware Updates ════════

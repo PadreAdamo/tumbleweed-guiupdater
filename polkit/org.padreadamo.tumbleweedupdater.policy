@@ -46,4 +46,32 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
     <annotate key="org.freedesktop.policykit.exec.argv1">apply</annotate>
   </action>
+
+  <action id="org.padreadamo.tumbleweedupdater.enable-unattended">
+    <description>Enable unattended Tumbleweed updates</description>
+    <message>Authentication is required to let Tumbleweed Updater check for and apply updates without prompting for your password each time.</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">enable-unattended</annotate>
+  </action>
+
+  <action id="org.padreadamo.tumbleweedupdater.disable-unattended">
+    <description>Disable unattended Tumbleweed updates</description>
+    <message>Authentication is required to require a password prompt again for Tumbleweed Updater's refresh and apply actions.</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">disable-unattended</annotate>
+  </action>
 </policyconfig>

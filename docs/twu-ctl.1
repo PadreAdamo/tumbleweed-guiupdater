@@ -43,6 +43,24 @@ A reboot is always recommended when firmware updates were applied.
 Refresh repository metadata using
 .BR "zypper ref" (8).
 Must be run as root via pkexec.
+.TP
+.B enable-unattended
+Install a polkit rule granting the invoking user passwordless authorization
+for the
+.B refresh
+and
+.B apply
+actions only, scoped to that user's local, active session.
+Must be run as root via pkexec, which itself requires interactive
+authentication once.
+Never affects the
+.B rollback
+action, which always requires interactive authentication.
+.TP
+.B disable-unattended
+Remove the polkit rule installed by
+.BR enable-unattended .
+Must be run as root via pkexec.
 .SH OUTPUT
 All commands output a JSON object to stdout.
 Progress output during
@@ -58,6 +76,20 @@ fwupd firmware updates, and auto-check interval.
 .TP
 .I ~/.local/share/TumbleweedUpdater/history.log
 Update history log in JSONL format (one JSON object per line).
+.TP
+.I ~/.local/share/TumbleweedUpdater/last-check-state.json
+Timestamp and result of the most recent successful
+.B status
+check, shared with
+.BR twu-ctl-notify (1)
+so the GUI can display an accurate "last checked" time regardless of
+whether the check was run interactively or by the background systemd timer.
+.TP
+.I /etc/polkit-1/rules.d/90-tumbleweedupdater-unattended-<user>.rules
+Passwordless authorization rule installed by
+.BR enable-unattended ,
+removed by
+.BR disable-unattended .
 .SH SEE ALSO
 .BR tumbleweed-updater (1),
 .BR twu-ctl-notify (1),
