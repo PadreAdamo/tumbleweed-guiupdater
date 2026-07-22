@@ -119,6 +119,9 @@ struct UiStatus {
     int        fwupdUpdateCount      = 0;
     QString    fwupdList;
     bool       fwupdApplied = false;
+    bool       repoError = false;
+    QStringList brokenRepos;
+    QString    repoKeyUrl;
 };
 
 static UiStatus parseStatusJson(const QString &out)
@@ -166,11 +169,23 @@ static UiStatus parseStatusJson(const QString &out)
     s.fwupdUpdateCount         = o["fwupdUpdateCount"].toInt();
     s.fwupdList                = o["fwupdList"].toString();
     s.fwupdApplied             = o["fwupdApplied"].toBool();
+    s.repoError                = o["repoError"].toBool();
+    for (const QJsonValue &v : o["brokenRepos"].toArray())
+        s.brokenRepos << v.toString();
+    s.repoKeyUrl                = o["repoKeyUrl"].toString();
 
     if (!ok) {
         if (needsAuth) {
             s.kind = "lock";
             s.text = QString("🔒 Admin required%1").arg(suffix);
+            if (!details.isEmpty())
+                s.text += "\n" + details;
+            return s;
+        }
+
+        if (s.repoError) {
+            s.kind = "error";
+            s.text = QString("❌ Repository problem%1").arg(suffix);
             if (!details.isEmpty())
                 s.text += "\n" + details;
             return s;
@@ -318,6 +333,9 @@ int main(int argc, char *argv[])
     KConfigGroup vendorPolicyGrp = cfg->group(QStringLiteral("VendorPolicy"));
     QString vendorPolicyMode = vendorPolicyGrp.readEntry("Mode", QStringLiteral("priority"));
 
+    KConfigGroup zypperGrp = cfg->group(QStringLiteral("Zypper"));
+    bool gpgAutoImportEnabled = zypperGrp.readEntry("AutoImportKeys", false);
+
     const bool snapperAvailable       = QFile::exists(QStringLiteral("/usr/bin/snapper"));
     const bool snapperGuiAvailable    = QFile::exists(QStringLiteral("/usr/bin/snapper-gui"));
     const bool kdesuAvailable         = QFile::exists(QStringLiteral("/usr/bin/kdesu"));
@@ -333,6 +351,7 @@ int main(int argc, char *argv[])
     const QString unattendedMarkerPathValue = unattendedMarkerPath();
     setProp(root, "settingsUnattendedEnabled", QFile::exists(unattendedMarkerPathValue));
     setProp(root, "settingsVendorPolicy",      vendorPolicyMode);
+    setProp(root, "settingsGpgAutoImportEnabled", gpgAutoImportEnabled);
     setProp(root, "snapperAvailable",          snapperAvailable);
     setProp(root, "snapperGuiAvailable",       snapperGuiAvailable);
     setProp(root, "yastAvailable",             yastAvailable && kdesuAvailable);
@@ -512,6 +531,7 @@ int main(int argc, char *argv[])
     bool refreshInProgress           = false;
     bool rollbackInProgress          = false;
     bool unattendedToggleInProgress  = false;
+    bool importKeyInProgress         = false;
     QString stdoutAccum;
 
     // Helper: show/raise the main window
@@ -524,7 +544,7 @@ int main(int argc, char *argv[])
     // Launch the privileged apply step. Shared by the manual "Apply Updates"
     // button and the automatic auto-apply path, so both keep the tray/log/busy
     // state in sync the same way.
-    auto startApply = [&](bool autoTriggered) {
+    auto startApply = [&](bool autoTriggered, const QString &skipRepo = QString()) {
         if (proc.state() != QProcess::NotRunning) {
             if (!autoTriggered) {
                 setProp(root, "statusKind", "warn");
@@ -539,7 +559,9 @@ int main(int argc, char *argv[])
         setProp(root, "rebootRequired", false);
         setProp(root, "busy", true);
         setProp(root, "statusText",
-                autoTriggered ? "Auto-applying updates…" : "Applying updates (admin)…");
+                !skipRepo.isEmpty()
+                    ? QString("Temporarily disabling '%1' and updating…").arg(skipRepo)
+                : autoTriggered ? "Auto-applying updates…" : "Applying updates (admin)…");
         setProp(root, "statusKind", "warn");
 
         if (tray) {
@@ -548,7 +570,10 @@ int main(int argc, char *argv[])
             tray->setStatus(KStatusNotifierItem::Active);
         }
 
-        proc.start("pkexec", {findTwuCtl(), "apply"});
+        const QStringList args = skipRepo.isEmpty()
+            ? QStringList{findTwuCtl(), QStringLiteral("apply")}
+            : QStringList{findTwuCtl(), QStringLiteral("apply-skip-repo"), skipRepo};
+        proc.start("pkexec", args);
         if (!proc.waitForStarted(1000)) {
             setProp(root, "statusKind", "error");
             setProp(root, "statusText", "❌ Error: could not start apply");
@@ -616,6 +641,25 @@ int main(int argc, char *argv[])
                         QFile::exists(unattendedMarkerPathValue));
                 setProp(root, "unattendedToggleFailed", !ok);
                 setProp(root, "busy", false);
+                return;
+            }
+
+            // Repository key import complete — on success immediately retry
+            // the apply that originally surfaced the signature failure.
+            if (importKeyInProgress) {
+                importKeyInProgress = false;
+                const bool ok = (exitStatus == QProcess::NormalExit && exitCode == 0);
+                if (ok) {
+                    setProp(root, "statusText", "✅ Key imported — retrying update…");
+                    setProp(root, "statusKind", "ok");
+                    startApply(false);
+                } else {
+                    setProp(root, "statusKind", "error");
+                    setProp(root, "statusText",
+                            "❌ Failed to import the repository key" +
+                            (err.isEmpty() ? QString() : QString("\n%1").arg(err)));
+                    setProp(root, "busy", false);
+                }
                 return;
             }
 
@@ -720,6 +764,14 @@ int main(int argc, char *argv[])
             if (applyInProgress && st.rebootRequired) {
                 setProp(root, "rebootRequired", true);
                 setProp(root, "showRebootDialog", true);
+            }
+
+            // Fire the repository-problem dialog for a failed apply caused by
+            // a signature/refresh error (e.g. a rotated repo signing key).
+            if (applyInProgress && st.kind == "error" && st.repoError) {
+                setProp(root, "brokenRepos", st.brokenRepos);
+                setProp(root, "repoKeyUrl",  st.repoKeyUrl);
+                setProp(root, "showRepoErrorDialog", true);
             }
 
             applyInProgress = false;
@@ -839,6 +891,32 @@ int main(int argc, char *argv[])
             }
         }
 
+        if (root->property("importRepoKeyRequested").toBool()) {
+            root->setProperty("importRepoKeyRequested", false);
+            const QString keyUrl = root->property("repoKeyUrl").toString();
+            if (!keyUrl.isEmpty() && proc.state() == QProcess::NotRunning) {
+                importKeyInProgress = true;
+                stdoutAccum.clear();
+                setProp(root, "busy", true);
+                setProp(root, "statusText", "Importing repository signing key…");
+                setProp(root, "statusKind", "warn");
+                proc.start("pkexec", {findTwuCtl(), "import-repo-key", keyUrl});
+                if (!proc.waitForStarted(1000)) {
+                    importKeyInProgress = false;
+                    setProp(root, "statusKind", "error");
+                    setProp(root, "statusText", "❌ Error: could not start key import");
+                    setProp(root, "busy", false);
+                }
+            }
+        }
+
+        if (root->property("skipRepoApplyRequested").toBool()) {
+            root->setProperty("skipRepoApplyRequested", false);
+            const QStringList broken = root->property("brokenRepos").toStringList();
+            if (!broken.isEmpty())
+                startApply(false, broken.first());
+        }
+
         if (root->property("runRebootRequested").toBool()) {
             root->setProperty("runRebootRequested", false);
             QProcess::startDetached("pkexec", {"systemctl", "reboot"});
@@ -854,6 +932,7 @@ int main(int argc, char *argv[])
             flatpakEnabled   = root->property("settingsFlatpakEnabled").toBool();
             vendorPolicyMode = root->property("settingsVendorPolicy").toString();
             autoApplyEnabled = root->property("settingsAutoApplyEnabled").toBool();
+            gpgAutoImportEnabled = root->property("settingsGpgAutoImportEnabled").toBool();
 
             auto wcfg = KSharedConfig::openConfig();
             wcfg->group(QStringLiteral("AutoCheck")).writeEntry("Enabled",       autoCheckEnabled);
@@ -862,6 +941,7 @@ int main(int argc, char *argv[])
             wcfg->group(QStringLiteral("Flatpak")).writeEntry("Enabled",         flatpakEnabled);
             wcfg->group(QStringLiteral("VendorPolicy")).writeEntry("Mode",       vendorPolicyMode);
             wcfg->group(QStringLiteral("AutoApply")).writeEntry("Enabled",       autoApplyEnabled);
+            wcfg->group(QStringLiteral("Zypper")).writeEntry("AutoImportKeys",   gpgAutoImportEnabled);
             wcfg->sync();
 
             if (autoCheckEnabled)

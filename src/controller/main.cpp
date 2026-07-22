@@ -4,10 +4,12 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <array>
 #include <vector>
 #include <filesystem>
@@ -15,6 +17,7 @@
 #include <pwd.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <cctype>
 
 static std::string iso8601_now_utc()
@@ -49,6 +52,51 @@ static int run_command_capture(const std::string &cmd, std::string &output)
 
     int rc = pclose(pipe);
     return rc;
+}
+
+// Runs a program directly via fork/execvp -- no shell -- so argv elements
+// (e.g. a URL parsed out of another program's output) can never be
+// reinterpreted as shell syntax, unlike run_command_capture()'s popen.
+static int run_argv_capture(const std::vector<std::string> &argv, std::string &output)
+{
+    output.clear();
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        std::vector<char *> cargv;
+        cargv.reserve(argv.size() + 1);
+        for (const auto &a : argv)
+            cargv.push_back(const_cast<char *>(a.c_str()));
+        cargv.push_back(nullptr);
+
+        execvp(cargv[0], cargv.data());
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    std::array<char, 4096> buffer{};
+    ssize_t n;
+    while ((n = read(pipefd[0], buffer.data(), buffer.size())) > 0)
+        output.append(buffer.data(), static_cast<size_t>(n));
+    close(pipefd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 static bool contains_any(const std::string &hay, const std::initializer_list<const char*> needles)
@@ -513,6 +561,28 @@ static bool read_flatpak_enabled()
     return read_kconfig_entry(kconf, "Flatpak", "Enabled", "false") == "true";
 }
 
+// ---- Zypper GPG key handling ----
+//
+// When a repository rotates its signing key (a known recurrence with
+// third-party repos like google-chrome), zypper refuses to refresh that
+// repo's metadata and `zypper dup` aborts entirely rather than risk
+// installing unverified packages. --gpg-auto-import-keys tells zypper to
+// accept a newly-seen signing key automatically instead of failing; it does
+// not weaken verification of packages against whichever key is current.
+// Opt-in and off by default since it removes a manual trust checkpoint.
+
+static bool read_gpg_auto_import_keys()
+{
+    const std::string kconf = get_kconfig_path();
+    if (kconf.empty()) return false;
+    return read_kconfig_entry(kconf, "Zypper", "AutoImportKeys", "false") == "true";
+}
+
+static std::string zypper_global_flags()
+{
+    return read_gpg_auto_import_keys() ? " --gpg-auto-import-keys" : "";
+}
+
 // ---- fwupd integration ----
 
 static bool read_fwupd_enabled()
@@ -943,7 +1013,7 @@ static int cmd_status()
 {
     const std::string timestamp    = iso8601_now_utc();
     const std::string vendorPolicy = read_vendor_policy();
-    const std::string zypperCmd    = "zypper -n lu 2>&1";
+    const std::string zypperCmd    = "zypper -n" + zypper_global_flags() + " lu 2>&1";
 
     std::string output;
     const int rc = run_command_capture(zypperCmd, output);
@@ -1028,7 +1098,8 @@ static int cmd_status()
     if (ok && updatesAvailable) {
         std::string dupOut;
         const std::string dupCmd =
-            "zypper -n dup --dry-run" + dup_policy_flags(vendorPolicy) + " 2>&1";
+            "zypper -n" + zypper_global_flags() + " dup --dry-run" +
+            dup_policy_flags(vendorPolicy) + " 2>&1";
         run_command_capture(dupCmd, dupOut);
         vendorChanges = parse_vendor_changes(dupOut);
         vendorChangeDetected = !vendorChanges.empty();
@@ -1130,7 +1201,8 @@ static int cmd_status()
 static int cmd_refresh()
 {
     std::string output;
-    const int rc = run_command_capture("zypper -n ref 2>&1", output);
+    const int rc = run_command_capture(
+        "zypper -n" + zypper_global_flags() + " ref 2>&1", output);
 
     const bool ok = (rc == 0);
     std::cout
@@ -1143,8 +1215,167 @@ static int cmd_refresh()
     return ok ? 0 : 1;
 }
 
-static int cmd_apply()
+// ---- Repository refresh/signature failure detection ----
+//
+// `zypper dup` aborts outright if any enabled repository fails to refresh
+// (most commonly a rotated signing key causing repomd.xml signature
+// verification to fail). Surfacing which repo broke -- instead of just
+// dumping the raw zypper transcript -- lets the GUI show something
+// actionable instead of an opaque wall of text.
+
+static bool is_repo_error(const std::string &output)
 {
+    return contains_any(output, {
+        "Signature verification failed",
+        "GPG check FAILED",
+        "have not been refreshed because of an error",
+        "Failed to retrieve new repository metadata"
+    });
+}
+
+static std::vector<std::string> extract_broken_repos(const std::string &output)
+{
+    std::vector<std::string> repos;
+    for (const char *marker : {"Repository '", "repository '"}) {
+        const size_t markerLen = std::strlen(marker);
+        size_t pos = 0;
+        while ((pos = output.find(marker, pos)) != std::string::npos) {
+            const size_t start = pos + markerLen;
+            const size_t end = output.find('\'', start);
+            if (end == std::string::npos) break;
+            const std::string name = output.substr(start, end - start);
+            if (!name.empty() &&
+                std::find(repos.begin(), repos.end(), name) == repos.end())
+                repos.push_back(name);
+            pos = end + 1;
+        }
+    }
+    return repos;
+}
+
+static std::string repo_error_details(const std::vector<std::string> &repos)
+{
+    std::string details;
+    if (repos.empty()) {
+        details = "A repository failed to refresh (signature verification failed).";
+    } else {
+        details = "Signature verification failed for: ";
+        for (size_t i = 0; i < repos.size(); ++i) {
+            if (i > 0) details += ", ";
+            details += "'" + repos[i] + "'";
+        }
+        details += ".";
+    }
+    details += " The repository's signing key has likely changed. Import its "
+               "current key and retry, or fix/disable the repository yourself.";
+    return details;
+}
+
+static std::string string_array_json(const std::vector<std::string> &items)
+{
+    std::string s = "[";
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i > 0) s += ",";
+        s += "\"" + json_escape(items[i]) + "\"";
+    }
+    s += "]";
+    return s;
+}
+
+// zypper prints the repo's own configured gpgkey= URL(s) while looking for a
+// key to verify against, e.g.:
+//   Looking for gpg keys in repository google-chrome.
+//     gpgkey=https://dl.google.com/linux/linux_signing_key.pub
+// That URL comes from the repo's local .repo file (writable only by root),
+// not from the network, so re-surfacing it to offer a one-click re-import is
+// safe -- it's not attacker-controlled the way the repomd.xml content is.
+struct RepoKeyInfo {
+    std::string repo;
+    std::string keyUrl;
+};
+
+static std::vector<RepoKeyInfo> extract_repo_gpg_keys(const std::string &output)
+{
+    std::vector<RepoKeyInfo> result;
+    std::string currentRepo;
+
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        const std::string trimmed = trim_copy(line);
+
+        static const std::string repoMarker = "Looking for gpg keys in repository ";
+        const size_t repoPos = trimmed.find(repoMarker);
+        if (repoPos != std::string::npos) {
+            currentRepo = trimmed.substr(repoPos + repoMarker.size());
+            if (!currentRepo.empty() && currentRepo.back() == '.')
+                currentRepo.pop_back();
+            continue;
+        }
+
+        static const std::string keyMarker = "gpgkey=";
+        const size_t keyPos = trimmed.find(keyMarker);
+        if (keyPos != std::string::npos && !currentRepo.empty()) {
+            const std::string url = trim_copy(trimmed.substr(keyPos + keyMarker.size()));
+            if (!url.empty())
+                result.push_back({currentRepo, url});
+        }
+    }
+    return result;
+}
+
+// Only https URLs are eligible for the one-click "Import Key & Retry" path;
+// anything else falls back to manual instructions.
+static bool valid_https_url(const std::string &url)
+{
+    if (url.rfind("https://", 0) != 0) return false;
+    if (url.size() > 2048) return false;
+    for (unsigned char c : url) {
+        if (c <= 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
+// Disables a repository for the duration of an apply, then always
+// re-enables it on scope exit -- including the early-return "failed to
+// start zypper" path in cmd_apply() below. Used by the "Skip Repo & Update"
+// action: when a repo's metadata can't be verified (e.g. an upstream
+// signing-key mismatch with no correct key published anywhere to import),
+// disabling it is the only way to let `zypper dup` proceed at all, since dup
+// refuses to run if any enabled repository fails to refresh. Best-effort:
+// failures to disable/re-enable are not treated as fatal, since worst case
+// the apply just fails the same way it would have without this.
+class RepoDisableGuard {
+public:
+    explicit RepoDisableGuard(const std::string &alias) : alias_(alias)
+    {
+        if (!alias_.empty()) {
+            std::string out;
+            run_argv_capture({"zypper", "-n", "mr", "-d", alias_}, out);
+        }
+    }
+
+    ~RepoDisableGuard()
+    {
+        if (!alias_.empty()) {
+            std::string out;
+            run_argv_capture({"zypper", "-n", "mr", "-e", alias_}, out);
+        }
+    }
+
+    RepoDisableGuard(const RepoDisableGuard &) = delete;
+    RepoDisableGuard &operator=(const RepoDisableGuard &) = delete;
+
+private:
+    std::string alias_;
+};
+
+static int cmd_apply(const std::string &skipRepoAlias = "")
+{
+    // No-op when skipRepoAlias is empty. Disables now, re-enables on every
+    // return path below via the destructor.
+    RepoDisableGuard repoGuard(skipRepoAlias);
+
     const std::string timestamp    = iso8601_now_utc();
     const std::string vendorPolicy = read_vendor_policy();
     const bool snapperEnabled      = read_snapper_enabled();
@@ -1160,7 +1391,8 @@ static int cmd_apply()
     }
 
     const std::string zypperCmd =
-        "zypper -n dup" + dup_policy_flags(vendorPolicy) + " 2>&1";
+        "zypper -n" + zypper_global_flags() + " dup" +
+        dup_policy_flags(vendorPolicy) + " 2>&1";
 
     std::string output;
     bool ok = false;
@@ -1226,6 +1458,25 @@ static int cmd_apply()
         "You must be root"
     });
 
+    const bool repoError = !ok && !needsAuth && is_repo_error(output);
+    const std::vector<std::string> brokenRepos =
+        repoError ? extract_broken_repos(output) : std::vector<std::string>{};
+
+    // Best-effort: the https key URL for whichever broken repo zypper
+    // printed one for, so the GUI can offer a one-click re-import.
+    std::string repoKeyUrl;
+    if (repoError) {
+        const std::vector<RepoKeyInfo> keys = extract_repo_gpg_keys(output);
+        for (const auto &k : keys) {
+            const bool matchesBrokenRepo =
+                std::find(brokenRepos.begin(), brokenRepos.end(), k.repo) != brokenRepos.end();
+            if ((matchesBrokenRepo || brokenRepos.empty()) && valid_https_url(k.keyUrl)) {
+                repoKeyUrl = k.keyUrl;
+                break;
+            }
+        }
+    }
+
     bool rebootRequired = ok && compute_apply_reboot_required(output);
 
     // Parse any vendor changes that actually occurred during this update
@@ -1290,9 +1541,15 @@ static int cmd_apply()
 
     std::string summary = ok         ? "Update complete"
                         : needsAuth  ? "Permission denied"
+                        : repoError  ? "Repository problem"
                                      : "Update failed";
     if (ok && vendorChangeDetected)
         summary += " (" + std::to_string(vendorChangeCount) + " vendor change(s))";
+    if (!skipRepoAlias.empty())
+        summary += " (skipped '" + skipRepoAlias + "', re-enabled)";
+
+    const std::string applyDetails =
+        repoError ? repo_error_details(brokenRepos) : std::string();
 
     // Ensure the JSON result starts on its own line
     if (!output.empty() && output.back() != '\n')
@@ -1302,7 +1559,10 @@ static int cmd_apply()
         << "{"
         << "\"ok\":"                   << (ok ? "true" : "false") << ","
         << "\"summary\":\""            << json_escape(summary) << "\","
-        << "\"details\":\"\","
+        << "\"details\":\""            << json_escape(applyDetails) << "\","
+        << "\"repoError\":"            << (repoError ? "true" : "false") << ","
+        << "\"brokenRepos\":"          << string_array_json(brokenRepos) << ","
+        << "\"repoKeyUrl\":\""         << json_escape(repoKeyUrl) << "\","
         << "\"packagePreview\":\"\","
         << "\"packageList\":\"\","
         << "\"updateCount\":0,"
@@ -1329,6 +1589,34 @@ static int cmd_apply()
     return ok ? 0 : 1;
 }
 
+// Imports a repository's current GPG signing key into the RPM keyring, so a
+// subsequent zypper run verifies against it. Used by the GUI's "Import Key &
+// Retry" action after a repository signature-verification failure -- e.g. a
+// vendor (Google's google-chrome repo has done this) rotating their key.
+// Deliberately run via fork/execvp (run_argv_capture), not a shell, since
+// the URL comes from parsed program output rather than a fixed string.
+static int cmd_import_repo_key(const std::string &url)
+{
+    if (!valid_https_url(url)) {
+        std::cout << "{\"ok\":false,\"details\":\"Refusing to import: "
+                      "key URL must be a plain https:// URL\"}\n";
+        return 1;
+    }
+
+    std::string output;
+    const int rc = run_argv_capture({"rpm", "--import", url}, output);
+    const bool ok = (rc == 0);
+
+    std::cout
+        << "{"
+        << "\"ok\":"      << (ok ? "true" : "false") << ","
+        << "\"details\":\"" << json_escape(trim_copy(output)) << "\""
+        << "}\n";
+    std::cout.flush();
+
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
@@ -1342,6 +1630,11 @@ int main(int argc, char *argv[])
             "  enable-unattended    Install a per-user passwordless polkit rule for\n"
             "                       refresh/apply (requires root via pkexec)\n"
             "  disable-unattended   Remove that rule (requires root via pkexec)\n"
+            "  import-repo-key URL  Import a repository's https:// GPG signing key\n"
+            "                       into the RPM keyring (requires root via pkexec)\n"
+            "  apply-skip-repo ALIAS\n"
+            "                       Apply updates with the named repository temporarily\n"
+            "                       disabled, then re-enable it (requires root via pkexec)\n"
             "\n"
             "Options:\n"
             "  --help     Show this help message\n"
@@ -1362,6 +1655,11 @@ int main(int argc, char *argv[])
             "  enable-unattended    Install a per-user passwordless polkit rule for\n"
             "                       refresh/apply (requires root via pkexec)\n"
             "  disable-unattended   Remove that rule (requires root via pkexec)\n"
+            "  import-repo-key URL  Import a repository's https:// GPG signing key\n"
+            "                       into the RPM keyring (requires root via pkexec)\n"
+            "  apply-skip-repo ALIAS\n"
+            "                       Apply updates with the named repository temporarily\n"
+            "                       disabled, then re-enable it (requires root via pkexec)\n"
             "\n"
             "Options:\n"
             "  --help     Show this help message\n"
@@ -1379,6 +1677,20 @@ int main(int argc, char *argv[])
     if (cmd == "refresh")            return cmd_refresh();
     if (cmd == "enable-unattended")  return cmd_enable_unattended();
     if (cmd == "disable-unattended") return cmd_disable_unattended();
+    if (cmd == "import-repo-key") {
+        if (argc < 3) {
+            std::cerr << "twu-ctl: import-repo-key requires a URL argument\n";
+            return 1;
+        }
+        return cmd_import_repo_key(argv[2]);
+    }
+    if (cmd == "apply-skip-repo") {
+        if (argc < 3) {
+            std::cerr << "twu-ctl: apply-skip-repo requires a repository alias argument\n";
+            return 1;
+        }
+        return cmd_apply(argv[2]);
+    }
 
     std::cerr << "twu-ctl: unknown command: " << cmd << "\n";
     std::cerr << "Try 'twu-ctl --help' for more information.\n";

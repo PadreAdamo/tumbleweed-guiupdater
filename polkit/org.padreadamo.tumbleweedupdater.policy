@@ -74,4 +74,32 @@
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
     <annotate key="org.freedesktop.policykit.exec.argv1">disable-unattended</annotate>
   </action>
+
+  <action id="org.padreadamo.tumbleweedupdater.import-repo-key">
+    <description>Import an updated repository signing key</description>
+    <message>Authentication is required to import a repository's updated GPG signing key.</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">import-repo-key</annotate>
+  </action>
+
+  <action id="org.padreadamo.tumbleweedupdater.apply-skip-repo">
+    <description>Apply Tumbleweed updates while skipping a broken repository</description>
+    <message>Authentication is required to apply system updates while temporarily skipping a repository that failed to refresh.</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/twu-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">apply-skip-repo</annotate>
+  </action>
 </policyconfig>

@@ -58,6 +58,20 @@ Kirigami.ApplicationWindow {
     property string fwupdList:      ""
     property string applyLog:       ""
 
+    // ---- Repository signature/refresh error (from a failed apply) ----
+    property bool   repoError:                false
+    property var    brokenRepos:               []
+    property string repoKeyUrl:                ""
+    property bool   showRepoErrorDialog:        false
+    property bool   importRepoKeyRequested:     false
+    property bool   skipRepoApplyRequested:     false
+    onShowRepoErrorDialogChanged: {
+        if (showRepoErrorDialog) {
+            showRepoErrorDialog = false
+            repoErrorDialog.open()
+        }
+    }
+
     // ---- History ----
     property string historyLog:              ""
     property bool   loadHistoryRequested:    false
@@ -70,6 +84,7 @@ Kirigami.ApplicationWindow {
     property bool   settingsFlatpakEnabled:   false
     property string settingsVendorPolicy:     "priority"
     property bool   settingsAutoApplyEnabled: false
+    property bool   settingsGpgAutoImportEnabled: false
     property bool   saveSettingsRequested:    false
     property bool   settingsUnattendedEnabled:    false
     property bool   enableUnattendedRequested:    false
@@ -323,6 +338,26 @@ Kirigami.ApplicationWindow {
                         root.settingsFlatpakEnabled = checked
                         root.saveSettingsRequested = true
                     }
+                }
+
+                Controls.Switch {
+                    Kirigami.FormData.label: "Auto-trust newly seen repository keys"
+                    checked: root.settingsGpgAutoImportEnabled
+                    onToggled: {
+                        root.settingsGpgAutoImportEnabled = checked
+                        root.saveSettingsRequested = true
+                    }
+                }
+
+                Controls.Label {
+                    Kirigami.FormData.label: " "
+                    text: "Skips the confirmation prompt the first time zypper sees a\n" +
+                          "repository's signing key. This does not cover a key that has\n" +
+                          "changed for a repository you've already trusted — that failure\n" +
+                          "is reported separately, with an option to import the new key."
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
 
                 Controls.Switch {
@@ -871,6 +906,81 @@ Kirigami.ApplicationWindow {
             Controls.Button {
                 text: "Later"
                 onClicked: rebootDialog.close()
+            }
+        }
+    }
+
+    Controls.Dialog {
+        id: repoErrorDialog
+        title: "Repository Problem"
+        modal: true
+        width: Math.min(root.width * 0.9, 520)
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: (root.brokenRepos.length > 0
+                          ? "'" + root.brokenRepos.join("', '") + "'"
+                          : "A repository") +
+                      " failed signature verification, so the update could not " +
+                      "proceed. This usually means the repository's signing key " +
+                      "has changed."
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: root.repoKeyUrl.length > 0
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                text: "Its current key, as configured for this repository:\n" + root.repoKeyUrl
+                font.family: "monospace"
+                font.pixelSize: 12
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                visible: root.repoKeyUrl.length === 0
+                wrapMode: Text.Wrap
+                text: "No importable key URL could be found automatically. Check the " +
+                      "Apply Log below for details."
+            }
+
+            Controls.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                text: "\"Skip Repo & Update\" temporarily disables '" +
+                      (root.brokenRepos.length > 0 ? root.brokenRepos[0] : "this repository") +
+                      "', applies the rest of your updates, then re-enables it " +
+                      "afterward — useful if the repository's problem is on its " +
+                      "end rather than something you can fix locally."
+            }
+        }
+
+        footer: Controls.DialogButtonBox {
+            Controls.Button {
+                text: "Import Key & Retry"
+                visible: root.repoKeyUrl.length > 0
+                onClicked: {
+                    repoErrorDialog.close()
+                    root.importRepoKeyRequested = true
+                }
+            }
+            Controls.Button {
+                text: "Skip Repo & Update"
+                visible: root.brokenRepos.length > 0
+                onClicked: {
+                    repoErrorDialog.close()
+                    root.skipRepoApplyRequested = true
+                }
+            }
+            Controls.Button {
+                text: "Cancel"
+                onClicked: repoErrorDialog.close()
             }
         }
     }

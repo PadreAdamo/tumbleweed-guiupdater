@@ -61,6 +61,39 @@ action, which always requires interactive authentication.
 Remove the polkit rule installed by
 .BR enable-unattended .
 Must be run as root via pkexec.
+.TP
+.BI "import-repo-key " URL
+Import a repository's GPG signing key, fetched from
+.IR URL ,
+into the RPM keyring via
+.BR "rpm --import" (8),
+so a subsequent
+.B apply
+verifies against it.
+.I URL
+must be a plain
+.B https://
+URL or the command refuses to run.
+Must be run as root via pkexec.
+Used by the GUI's "Import Key & Retry" action after a repository
+signature-verification failure.
+.TP
+.BI "apply-skip-repo " ALIAS
+Like
+.BR apply ,
+but first disables the repository named
+.I ALIAS
+via
+.BR "zypper mr -d" (8),
+and always re-enables it again afterward, regardless of outcome.
+Must be run as root via pkexec.
+Used by the GUI's "Skip Repo & Update" action when a repository's metadata
+can't be verified and no correct signing key is available to import (for
+example, a temporary upstream signing problem) -- disabling it is the only
+way to let
+.B "zypper dup"
+proceed, since it refuses to run if any enabled repository fails to
+refresh.
 .SH OUTPUT
 All commands output a JSON object to stdout.
 Progress output during
@@ -72,7 +105,13 @@ with the final JSON result on the last line.
 .I ~/.config/TumbleweedUpdaterrc
 User configuration file in KConfig INI format.
 Controls vendor policy, Snapper integration, Flatpak updates,
-fwupd firmware updates, and auto-check interval.
+fwupd firmware updates, auto-check interval, and whether zypper is run
+with
+.B --gpg-auto-import-keys
+(the
+.B [Zypper]
+.B AutoImportKeys
+key).
 .TP
 .I ~/.local/share/TumbleweedUpdater/history.log
 Update history log in JSONL format (one JSON object per line).
